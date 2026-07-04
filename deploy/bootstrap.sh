@@ -467,6 +467,8 @@ ok()   { echo "[OK]    $(date -u '+%H:%M:%S') $1"; }
 info() { echo "[INFO]  $(date -u '+%H:%M:%S') $1"; }
 
 step "mise install"
+# Pin mise version — v2026.7.0+ requires glibc ≥2.38, AL2023 has 2.34
+export MISE_VERSION=v2026.5.16
 for _attempt in 1 2 3; do
   if curl --retry 3 --retry-delay 2 -fsSL https://mise.run | sh; then
     break
