@@ -2855,11 +2855,17 @@ _account_already_prefixed() {
     display_name=$(printf '%s' "$current_name" | tr -d '\000-\037')
     ok "Account already named for Loki: $(printf '%s' "$display_name")"
     # Write SSM params if they don't exist yet (first install with pre-existing prefix).
-    # Note: stripped_original is a best-guess — if account was manually named
-    # "LOKI-Foo", we store "Foo" but the true pre-Loki original is unknown.
+    # Note: stripped_original is a best-guess — only strip when the name
+    # has a real "Loki-" / "loki-" separator. For freeform "loki*" matches
+    # (e.g. "LokiDev-Foo", "loki1-Bar") there is no reliable way to recover
+    # the pre-Loki name, so fall back to ACCOUNT_ID.
     if ! aws ssm get-parameter --name "/loki/original-account-name" \
         --region "${DEPLOY_REGION:-$REGION}" --output text >/dev/null 2>&1; then
-      local stripped_original="${current_name:5}"  # strip 5-char prefix (Loki-)
+      local stripped_original=""
+      local lower_prefix="${lower_name:0:5}"
+      if [[ "$lower_prefix" == "loki-" ]]; then
+        stripped_original="${current_name:5}"  # strip exact 5-char "Loki-" prefix
+      fi
       [[ -n "$stripped_original" ]] || stripped_original="$ACCOUNT_ID"
       aws ssm put-parameter --name "/loki/original-account-name" \
         --value "$stripped_original" --type String --overwrite \
