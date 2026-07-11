@@ -72,7 +72,7 @@ REPO_URL="https://github.com/inceptionstack/lowkey.git"
 DOCS_URL="https://github.com/inceptionstack/lowkey/wiki"
 TEMPLATE_RAW_URL="https://raw.githubusercontent.com/inceptionstack/lowkey/main/deploy/cloudformation/template.yaml"
 SSM_DOC_NAME=""
-INSTALLER_VERSION="0.5.190"
+INSTALLER_VERSION="0.5.191"
 
 # ── Telemetry ────────────────────────────────────────────────────────────
 # Fire-and-forget telemetry. Opt-out: LOWKEY_TELEMETRY=0 / DO_NOT_TRACK=1
