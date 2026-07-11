@@ -125,9 +125,16 @@ ok "OpenClaw installed: ${OC_VERSION}"
 # external plugin. Without it every LLM request fails with:
 #   "No API provider registered for api: bedrock-converse-stream"
 step "Installing Bedrock provider plugin"
-openclaw plugins install @openclaw/amazon-bedrock-provider \
-  && ok "@openclaw/amazon-bedrock-provider installed" \
-  || { warn "Bedrock provider plugin install failed — gateway will not start"; exit 1; }
+# Idempotent: install if missing, update if already present
+if openclaw plugins list 2>/dev/null | grep -q "amazon-bedrock"; then
+  openclaw plugins update @openclaw/amazon-bedrock-provider \
+    && ok "@openclaw/amazon-bedrock-provider updated" \
+    || warn "Bedrock plugin update failed (non-fatal — existing version still active)"
+else
+  openclaw plugins install @openclaw/amazon-bedrock-provider \
+    && ok "@openclaw/amazon-bedrock-provider installed" \
+    || { warn "Bedrock provider plugin install failed — gateway will not start"; exit 1; }
+fi
 
 # ── Workspace and state dir ───────────────────────────────────────────────────
 step "Workspace setup"
