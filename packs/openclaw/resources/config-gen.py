@@ -44,8 +44,8 @@ bedrock_models = [
 ]
 
 # Default model IDs using global. prefix
-PRIMARY_MODEL = "amazon-bedrock/global.anthropic.claude-opus-4-6-v1"
-FALLBACK_MODEL = "amazon-bedrock/global.anthropic.claude-sonnet-4-6"
+PRIMARY_MODEL = "amazon-bedrock/global.anthropic.claude-sonnet-4-6"
+FALLBACK_MODEL = "amazon-bedrock/global.anthropic.claude-sonnet-4-20250514-v1:0"
 HEARTBEAT_MODEL = "amazon-bedrock/global.anthropic.claude-sonnet-4-6"
 
 cfg = {
