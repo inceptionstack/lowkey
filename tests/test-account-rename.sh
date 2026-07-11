@@ -327,11 +327,11 @@ test_already_prefixed() {
   source "$TMPDIR/functions.sh"
   DISABLE_ACCOUNT_RENAME=false
   _AWS_ACCOUNT_INFO_EXIT=0
-  _AWS_ACCOUNT_INFO_RESULT='{"AccountName":"Loki-MyAccount"}'
+  _AWS_ACCOUNT_INFO_RESULT='{"AccountName":"Lowkey-MyAccount"}'
   _AWS_SSM_GET_EXIT=1  # SSM param not found → write it
   _OUTPUT="" _TELEM_EVENTS=()
   maybe_rename_account
-  assert_contains "ok message" "already named for Loki" "$_OUTPUT"
+  assert_contains "ok message" "already named for Lowkey" "$_OUTPUT"
   assert_contains "telemetry skipped_reason" '"already_prefixed"' "${_TELEM_EVENTS[0]}"
 }; test_already_prefixed
 
@@ -339,31 +339,31 @@ test_already_prefixed_case_insensitive() {
   source "$TMPDIR/functions.sh"
   DISABLE_ACCOUNT_RENAME=false
   _AWS_ACCOUNT_INFO_EXIT=0
-  _AWS_ACCOUNT_INFO_RESULT='{"AccountName":"lOkI-MyAccount"}'
+  _AWS_ACCOUNT_INFO_RESULT='{"AccountName":"lOwKeY-MyAccount"}'
   _OUTPUT="" _TELEM_EVENTS=()
   maybe_rename_account
-  assert_contains "detects case-insensitive prefix" "already named for Loki" "$_OUTPUT"
+  assert_contains "detects case-insensitive prefix" "already named for Lowkey" "$_OUTPUT"
 }; test_already_prefixed_case_insensitive
 
-test_already_prefixed_loki_variant() {
+test_already_prefixed_lowkey_variant() {
   source "$TMPDIR/functions.sh"
   DISABLE_ACCOUNT_RENAME=false
   _AWS_ACCOUNT_INFO_EXIT=0
-  _AWS_ACCOUNT_INFO_RESULT='{"AccountName":"loki1-MyAccount"}'
+  _AWS_ACCOUNT_INFO_RESULT='{"AccountName":"lowkey1-MyAccount"}'
   _OUTPUT="" _TELEM_EVENTS=()
   maybe_rename_account
-  assert_contains "detects loki1- as already prefixed" "already named for Loki" "$_OUTPUT"
-}; test_already_prefixed_loki_variant
+  assert_contains "detects lowkey1- as already prefixed" "already named for Lowkey" "$_OUTPUT"
+}; test_already_prefixed_lowkey_variant
 
-test_already_prefixed_lokidev() {
+test_already_prefixed_lowkeydev() {
   source "$TMPDIR/functions.sh"
   DISABLE_ACCOUNT_RENAME=false
   _AWS_ACCOUNT_INFO_EXIT=0
-  _AWS_ACCOUNT_INFO_RESULT='{"AccountName":"LokiDev-SomeAccount"}'
+  _AWS_ACCOUNT_INFO_RESULT='{"AccountName":"LowkeyDev-SomeAccount"}'
   _OUTPUT="" _TELEM_EVENTS=()
   maybe_rename_account
-  assert_contains "detects LokiDev- as already prefixed" "already named for Loki" "$_OUTPUT"
-}; test_already_prefixed_lokidev
+  assert_contains "detects LowkeyDev- as already prefixed" "already named for Lowkey" "$_OUTPUT"
+}; test_already_prefixed_lowkeydev
 
 test_headless_no_opt_in() {
   source "$TMPDIR/functions.sh"
@@ -419,7 +419,7 @@ test_empty_account_name_fallback() {
   _AWS_ACCOUNT_PUT_EXIT=0
   _OUTPUT="" _TELEM_EVENTS=()
   maybe_rename_account
-  assert_contains "uses account ID fallback" "Loki-123456789012" "$_OUTPUT"
+  assert_contains "uses account ID fallback" "Lowkey-123456789012" "$_OUTPUT"
 }; test_empty_account_name_fallback
 
 test_long_name_truncation() {
@@ -428,7 +428,7 @@ test_long_name_truncation() {
   AUTO_YES=true
   AUTO_RENAME_ACCOUNT=true
   _AWS_ACCOUNT_INFO_EXIT=0
-  # 50 char name + "Loki-" = 55, must truncate
+  # 50 char name + "Lowkey-" = 57, must truncate
   _AWS_ACCOUNT_INFO_RESULT='{"AccountName":"ThisIsAVeryLongAccountNameThatExceedsFiftyCharsX"}'
   _AWS_ACCOUNT_PUT_EXIT=0
   _OUTPUT="" _TELEM_EVENTS=()
@@ -447,8 +447,8 @@ test_sanitize_then_prefix() {
   _AWS_ACCOUNT_PUT_EXIT=0
   _OUTPUT="" _TELEM_EVENTS=()
   maybe_rename_account
-  # Should sanitize to "mybadname" then prefix → "Loki-mybadname"
-  assert_contains "sanitized and prefixed" "Loki-mybadname" "$_OUTPUT"
+  # Should sanitize to "mybadname" then prefix → "Lowkey-mybadname"
+  assert_contains "sanitized and prefixed" "Lowkey-mybadname" "$_OUTPUT"
 }; test_sanitize_then_prefix
 
 # ============================================================================
