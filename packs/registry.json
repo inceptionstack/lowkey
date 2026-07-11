@@ -47,7 +47,7 @@
     },
     "hermes": {
       "type": "agent",
-      "description": "Hermes — NousResearch CLI agent via bedrockify (experimental)",
+      "description": "Hermes — NousResearch CLI agent via bedrockify",
       "deps": [
         "bedrockify"
       ],
@@ -62,7 +62,7 @@
     },
     "kiro-cli": {
       "type": "agent",
-      "description": "Kiro CLI v2 — AWS agentic IDE terminal client with MCP server support (experimental, headless mode available via --kiro-api-key)",
+      "description": "Kiro CLI v2 — AWS agentic IDE terminal client with MCP server support (headless mode available via --kiro-api-key)",
       "deps": [],
       "instance_type": "t4g.medium",
       "root_volume_gb": 40,
