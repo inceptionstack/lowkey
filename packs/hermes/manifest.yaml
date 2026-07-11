@@ -1,10 +1,9 @@
 name: hermes
-version: "1.0.0"
+version: "2.0.0"
 type: agent
-description: "NousResearch Hermes CLI agent via bedrockify"
+description: "NousResearch Hermes CLI agent with native Bedrock support"
 
-deps:
-  - bedrockify
+deps: []
 
 requirements:
   arch:
@@ -20,11 +19,8 @@ params:
     description: "AWS region for Bedrock"
     default: us-east-1
   - name: hermes-model
-    description: "Bedrock model ID (resolved by bedrockify). Generic --model is ignored."
-    default: "global.anthropic.claude-opus-4-6-v1"
-  - name: bedrockify-port
-    description: "Port where bedrockify is running"
-    default: "8090"
+    description: "Bedrock model ID (inference profile)"
+    default: "us.anthropic.claude-sonnet-4-6"
 
 health_check:
   command: "hermes --version"

@@ -1,3 +1,5 @@
 # Hermes Agent environment
-# bedrockify handles AWS authentication via IAM instance profile — no API key needed.
-OPENAI_API_KEY=not-needed
+# Native Bedrock — uses IAM instance role, no API keys needed.
+# Add optional keys below for extra tool access:
+# EXA_API_KEY=
+# TAVILY_API_KEY=
