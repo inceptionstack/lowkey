@@ -272,3 +272,94 @@ run_optional_sidecar() {
     exit 0
   ) || true
 }
+
+# ── install_aws_toolkit_skills ────────────────────────────────────────────────
+# Install AWS Agent Toolkit skills into an agent's skills directory.
+# Usage: install_aws_toolkit_skills <target_dir>
+#   target_dir: agent-specific skills path (e.g. ~/.claude/skills)
+# Prefers 'npx skills add' (official method). Falls back to sparse git clone.
+# Best-effort: never fails the parent installer.
+# Duplicate loki-skills are overwritten by the toolkit (newer, preferred).
+install_aws_toolkit_skills() {
+  local target_dir="$1"
+  local toolkit_repo="aws/agent-toolkit-for-aws"
+  local toolkit_skills_path="skills"
+
+  mkdir -p "${target_dir}"
+
+  if command -v npx &>/dev/null; then
+    log "Installing AWS Agent Toolkit skills via npx → ${target_dir}"
+    SKILLS_DIR="${target_dir}" npx --yes skills add "${toolkit_repo}/${toolkit_skills_path}" \
+      2>&1 | grep -v "^npm warn" || true
+    if [[ -d "${target_dir}/core-skills" || -d "${target_dir}/specialized-skills" ]]; then
+      ok "AWS Agent Toolkit skills installed → ${target_dir}"
+      return 0
+    fi
+    warn "npx skills add returned but skills dirs not found — falling back to git clone"
+  fi
+
+  # Fallback: sparse git clone of skills subtree
+  local tmp_clone; tmp_clone="$(mktemp -d)"
+  if git clone --depth=1 --filter=blob:none --sparse \
+      "https://github.com/${toolkit_repo}.git" "${tmp_clone}" 2>/dev/null; then
+    git -C "${tmp_clone}" sparse-checkout set "${toolkit_skills_path}" 2>/dev/null
+    if [[ -d "${tmp_clone}/${toolkit_skills_path}" ]]; then
+      cp -r "${tmp_clone}/${toolkit_skills_path}/." "${target_dir}/"
+      ok "AWS Agent Toolkit skills installed (git clone fallback) → ${target_dir}"
+    else
+      warn "AWS Agent Toolkit skills: sparse checkout empty — skipping"
+    fi
+  else
+    warn "AWS Agent Toolkit skills: git clone failed — skipping (non-fatal)"
+  fi
+  rm -rf "${tmp_clone}"
+  return 0
+}
+
+# ── install_aws_mcp_proxy ─────────────────────────────────────────────────────
+# Install and wire mcp-proxy-for-aws (official AWS MCP server successor).
+# Writes ~/.kiro/agents/aws-mcp.json (kiro format) or ~/.config/mcp/aws.json.
+# Usage: install_aws_mcp_proxy <region> [<config_path>]
+# Requires: uv (installed by kiro-cli step 2 or present on system)
+MCP_PROXY_VERSION="1.6.3"
+install_aws_mcp_proxy() {
+  local region="${1:-us-east-1}"
+  local config_path="${2:-}"
+
+  if ! command -v uv &>/dev/null && ! command -v uvx &>/dev/null; then
+    warn "uv/uvx not found — skipping mcp-proxy-for-aws install (non-fatal)"
+    return 0
+  fi
+
+  local uvx_cmd
+  uvx_cmd="$(command -v uvx 2>/dev/null || echo "uv run --with uvx uvx")"
+
+  log "Configuring mcp-proxy-for-aws@${MCP_PROXY_VERSION} (region: ${region})"
+
+  # Write MCP server config (JSON used by kiro and other MCP-aware agents)
+  if [[ -n "${config_path}" ]]; then
+    mkdir -p "$(dirname "${config_path}")"
+    cat > "${config_path}" << MCPJSON
+{
+  "mcpServers": {
+    "aws": {
+      "command": "uvx",
+      "args": [
+        "mcp-proxy-for-aws@${MCP_PROXY_VERSION}",
+        "https://aws-mcp.${region}.api.aws/mcp",
+        "--metadata",
+        "AWS_REGION=${region}"
+      ]
+    }
+  }
+}
+MCPJSON
+    chmod 600 "${config_path}"
+    ok "AWS MCP proxy config written: ${config_path}"
+  fi
+
+  # Pre-warm: pull the package so first run is instant
+  ${uvx_cmd} "mcp-proxy-for-aws@${MCP_PROXY_VERSION}" --help &>/dev/null &
+  ok "mcp-proxy-for-aws@${MCP_PROXY_VERSION} configured (region: ${region})"
+  return 0
+}

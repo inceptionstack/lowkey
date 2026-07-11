@@ -132,10 +132,11 @@ ok "Pi config written: ${HOME}/.pi/agent/models.json"
 # Users can also create manual TypeScript extension adapters if needed.
 PACK_SKILLS_DIR="${HOME}/.pi/agent/extensions"
 if ensure_skills_clone "${PACK_SKILLS_DIR}"; then
-  ok "Skills installed to ${PACK_SKILLS_DIR} (auto-discovered by pi)"
+  ok "loki-skills installed to ${PACK_SKILLS_DIR}"
 else
-  warn "Skills clone failed (optional; pi is still usable without skills)"
+  warn "loki-skills clone failed (optional)"
 fi
+install_aws_toolkit_skills "${PACK_SKILLS_DIR}"
 
 # ── Sanity check ─────────────────────────────────────────────────────────────
 step "Sanity check"

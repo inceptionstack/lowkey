@@ -361,6 +361,28 @@ else
 fi
 
 
+
+# ── Install AWS Agent Toolkit plugin + skills ──────────────────────────────
+step "Installing AWS Agent Toolkit"
+if openclaw plugins list 2>/dev/null | grep -q "aws-core"; then
+  openclaw plugins update aws-core \\
+    && ok "Plugin updated: aws-core" \\
+    || warn "aws-core plugin update failed (non-fatal)"
+else
+  openclaw plugins install "aws-core@claude-plugins-official" \\
+    && ok "Plugin installed: aws-core" \\
+    || warn "aws-core plugin install failed (non-fatal)"
+fi
+if openclaw plugins list 2>/dev/null | grep -q "aws-agents"; then
+  openclaw plugins update aws-agents 2>/dev/null || true
+else
+  openclaw plugins install "aws-agents@claude-plugins-official" 2>/dev/null \\
+    && ok "Plugin installed: aws-agents" \\
+    || warn "aws-agents plugin install skipped (non-fatal)"
+fi
+SKILLS_DIR="${HOME}/.openclaw/workspace/skills"
+install_aws_toolkit_skills "${SKILLS_DIR}"
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 # Mark the pack done and show the success banner BEFORE optional sidecars.
 # The user should not wait on best-effort work to see that their install

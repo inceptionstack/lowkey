@@ -291,13 +291,26 @@ NOTICE
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 
-# ── Install loki-skills library ───────────────────────────────────────────────
-# Best-effort: pre-install skills for auto-discovery.
+# ── Install AWS Agent Toolkit plugin ─────────────────────────────────────────
+step "Installing AWS Agent Toolkit plugin for Codex"
+if command -v codex &>/dev/null; then
+  codex plugin marketplace add aws/agent-toolkit-for-aws 2>/dev/null \
+    && ok "AWS toolkit marketplace added" \
+    || warn "Marketplace add skipped (may already exist or offline)"
+  codex plugin install aws-core 2>/dev/null \
+    && ok "Plugin installed: aws-core" \
+    || warn "aws-core plugin install skipped (non-fatal)"
+else
+  warn "codex CLI not on PATH — skipping plugin install (non-fatal)"
+fi
+
+# ── Install loki-skills + AWS Agent Toolkit skills ───────────────────────
 PACK_SKILLS_DIR="${HOME}/.codex/skills"
 if ensure_skills_clone "${PACK_SKILLS_DIR}"; then
-  ok "Skills installed to ${PACK_SKILLS_DIR} (auto-discovered)"
+  ok "loki-skills installed to ${PACK_SKILLS_DIR}"
 else
-  warn "Skills clone failed (optional; codex is still usable without skills)"
+  warn "loki-skills clone failed (optional)"
 fi
+install_aws_toolkit_skills "${PACK_SKILLS_DIR}"
 write_done_marker "codex-cli"
 printf "\n[PACK:codex-cli] INSTALLED — codex CLI ready (model: %s)\n" "${MODEL}"

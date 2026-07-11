@@ -226,27 +226,12 @@ else
   warn "uvenv not found — will skip MCP server installs"
 fi
 
-# ── Step 3: Install common AWS MCP servers ────────────────────────────────────
-step "Installing common AWS MCP servers"
-
-if command -v uvenv &>/dev/null; then
-  MCP_SERVERS=(
-    "awslabs.terraform-mcp-server"
-    "awslabs.ecs-mcp-server"
-    "awslabs.eks-mcp-server"
-    "awslabs.core-mcp-server"
-    "awslabs.aws-documentation-mcp-server"
-  )
-
-  for mcp_server in "${MCP_SERVERS[@]}"; do
-    log "Installing MCP server: ${mcp_server}"
-    uvenv install "${mcp_server}" 2>/dev/null && \
-      ok "Installed: ${mcp_server}" || \
-      warn "Could not install ${mcp_server} (will be fetched on first use)"
-  done
-else
-  warn "uvenv not available — skipping MCP server installs (install manually with: uvenv install awslabs.<server>)"
-fi
+# ── Step 3: Configure AWS MCP proxy (mcp-proxy-for-aws) ───────────────────────
+# mcp-proxy-for-aws is the official AWS successor to individual awslabs.*
+# MCP servers — one endpoint covers all 300+ AWS services with IAM audit logging.
+# Pinned version for reproducibility; check https://pypi.org/project/mcp-proxy-for-aws/
+step "Configuring AWS MCP proxy"
+install_aws_mcp_proxy "${REGION}" "${HOME}/.kiro/settings/mcp.json"
 
 # ── Step 4: Wire up KIRO_API_KEY if provided ─────────────────────────────────
 if [[ -n "${PACK_ARG_API_KEY}" ]]; then
@@ -359,14 +344,15 @@ if [[ -f "${SHELL_PROFILE}" && -d /etc/profile.d ]]; then
     warn "Could not install shell profile (permission denied?)"
 fi
 
-# ── Install loki-skills library ───────────────────────────────────────────────
-# Best-effort: pre-install skills for auto-discovery.
+# ── Install loki-skills + AWS Agent Toolkit skills ────────────────────────────
+# Toolkit skills overwrite duplicates (toolkit is preferred — newer + evaluated).
 PACK_SKILLS_DIR="${HOME}/.kiro/skills"
 if ensure_skills_clone "${PACK_SKILLS_DIR}"; then
-  ok "Skills auto-installed to ${PACK_SKILLS_DIR} (auto-discovered)"
+  ok "loki-skills installed to ${PACK_SKILLS_DIR}"
 else
-  warn "Skills clone failed (optional; kiro is still usable without skills)"
+  warn "loki-skills clone failed (optional)"
 fi
+install_aws_toolkit_skills "${PACK_SKILLS_DIR}"
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 write_done_marker "kiro-cli"
