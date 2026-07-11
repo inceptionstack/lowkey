@@ -147,10 +147,11 @@ fi
 # ── Install skills ────────────────────────────────────────────────────────────
 PACK_SKILLS_DIR="${HOME}/.hermes/skills"
 if ensure_skills_clone "${PACK_SKILLS_DIR}"; then
-  ok "Skills installed to ${PACK_SKILLS_DIR}"
+  ok "loki-skills installed to ${PACK_SKILLS_DIR}"
 else
-  warn "Skills clone failed (optional; hermes is still usable without skills)"
+  warn "loki-skills clone failed (optional)"
 fi
+install_aws_toolkit_skills "${PACK_SKILLS_DIR}"
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 write_done_marker "hermes"

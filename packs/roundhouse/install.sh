@@ -155,6 +155,15 @@ fi
 
 
 # ── Done ──────────────────────────────────────────────────────────────────────
+# ── Install loki-skills + AWS Agent Toolkit skills ───────────────────────────
+PACK_SKILLS_DIR="${HOME}/.roundhouse/skills"
+if ensure_skills_clone "${PACK_SKILLS_DIR}"; then
+  ok "loki-skills installed to ${PACK_SKILLS_DIR}"
+else
+  warn "loki-skills clone failed (optional)"
+fi
+install_aws_toolkit_skills "${PACK_SKILLS_DIR}"
+
 write_done_marker "roundhouse"
 printf "\n[PACK:roundhouse] INSTALLED — Telegram bot connected (systemd: roundhouse)\n"
 

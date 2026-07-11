@@ -156,14 +156,33 @@ ok "claude --version: ${CLAUDE_VER}"
 
 # ── Done ─────────────────────────────────────────────────────────────────────
 
-# ── Install loki-skills library ───────────────────────────────────────────────
-# Best-effort: pre-install skills for auto-discovery.
+# ── Install AWS Agent Toolkit plugins ────────────────────────────────────────
+# Plugins bundle MCP server config + skills in one install.
+# Prefer toolkit over loki-skills for overlapping AWS skills (toolkit is newer).
+step "Installing AWS Agent Toolkit plugins"
+if command -v claude &>/dev/null; then
+  # Update marketplace index first (non-fatal if offline)
+  claude --dangerously-skip-permissions /plugin marketplace update claude-plugins-official \
+    2>/dev/null || true
+  for plugin in aws-core aws-agents; do
+    claude --dangerously-skip-permissions /plugin install "${plugin}@claude-plugins-official" \
+      2>/dev/null \
+      && ok "Plugin installed: ${plugin}" \
+      || warn "Plugin install skipped: ${plugin} (may already be installed or offline)"
+  done
+else
+  warn "claude CLI not on PATH — skipping plugin install (non-fatal)"
+fi
+
+# ── Install loki-skills (non-AWS skills) + AWS Agent Toolkit skills ───────────
+# AWS toolkit skills overwrite any duplicate loki-skills (toolkit is preferred).
 PACK_SKILLS_DIR="${HOME}/.claude/skills"
 if ensure_skills_clone "${PACK_SKILLS_DIR}"; then
-  ok "Skills installed to ${PACK_SKILLS_DIR} (auto-discovered)"
+  ok "loki-skills installed to ${PACK_SKILLS_DIR}"
 else
-  warn "Skills clone failed (optional; claude is still usable without skills)"
+  warn "loki-skills clone failed (optional)"
 fi
+install_aws_toolkit_skills "${PACK_SKILLS_DIR}"
 write_done_marker "claude-code"
 printf "\n[PACK:claude-code] INSTALLED — claude CLI ready (model: %s via Bedrock region: %s)\n" \
   "${MODEL}" "${REGION}"
