@@ -51,7 +51,7 @@ HEARTBEAT_MODEL = "amazon-bedrock/global.anthropic.claude-sonnet-4-6"
 cfg = {
   "models": {"providers": {"amazon-bedrock": {"baseUrl": f"https://bedrock-runtime.{bedrock_region}.amazonaws.com", "auth": "aws-sdk", "api": "bedrock-converse-stream", "models": bedrock_models}}},
   "plugins": {"entries": {"amazon-bedrock": {"enabled": True, "config": {"discovery": {"enabled": True}}}}},
-  "agents": {"defaults": {"model": {"primary": PRIMARY_MODEL, "fallbacks": [FALLBACK_MODEL]}, "workspace": f"{home}/.openclaw/workspace", "compaction": {"mode": "safeguard"}, "heartbeat": {"model": HEARTBEAT_MODEL, "target": "telegram", "every": "30m", "lightContext": True, "isolatedSession": True}, "maxConcurrent": 4, "subagents": {"maxConcurrent": 8}}},
+  "agents": {"defaults": {"model": {"primary": PRIMARY_MODEL, "fallbacks": [FALLBACK_MODEL]}, "workspace": f"{home}/.openclaw/workspace", "compaction": {"mode": "safeguard"}, "memorySearch": {"provider": "bedrock", "model": "amazon.titan-embed-text-v2:0"}, "heartbeat": {"model": HEARTBEAT_MODEL, "target": "telegram", "every": "30m", "lightContext": True, "isolatedSession": True}, "maxConcurrent": 4, "subagents": {"maxConcurrent": 8}}},
   "tools": {"web": {"search": {"enabled": False}, "fetch": {"enabled": True}}},
   "hooks": {"internal": {"enabled": True, "entries": {"boot-md": {"enabled": True}, "bootstrap-extra-files": {"enabled": True}, "command-logger": {"enabled": True}, "session-memory": {"enabled": True}}}},
   "gateway": {"port": int(gw_port), "mode": "local", "bind": "loopback", "auth": {"mode": "token", "token": gw_token}}
