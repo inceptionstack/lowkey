@@ -1373,12 +1373,18 @@ check_bedrock_access() {
   esac
   local probe_model="${geo_prefix}.anthropic.claude-sonnet-4-6"
 
-  # Older AWS CLI builds lack `bedrock-runtime converse`; skip gracefully
+  # Older AWS CLI builds lack `bedrock-runtime converse`; update in-place
   if ! aws bedrock-runtime converse help >/dev/null 2>&1; then
-    BEDROCK_ACCESS_OK="unknown"
-    warn "AWS CLI too old to test model invocation — skipping invoke check."
-    ok "Bedrock service reachable in ${probe_region}"
-    return 0
+    warn "AWS CLI too old to test model invocation — updating AWS CLI..."
+    _update_aws_cli || true
+    hash -r  # forget cached path in case the binary location changed
+    if ! aws bedrock-runtime converse help >/dev/null 2>&1; then
+      BEDROCK_ACCESS_OK="unknown"
+      warn "AWS CLI update failed or still lacks 'bedrock-runtime converse' — skipping invoke check."
+      ok "Bedrock service reachable in ${probe_region}"
+      return 0
+    fi
+    ok "AWS CLI updated: $(aws --version 2>&1 | head -1)"
   fi
 
   local invoke_err=""
