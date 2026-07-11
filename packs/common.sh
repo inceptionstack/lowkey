@@ -289,7 +289,7 @@ install_aws_toolkit_skills() {
 
   if command -v npx &>/dev/null; then
     log "Installing AWS Agent Toolkit skills via npx → ${target_dir}"
-    SKILLS_DIR="${target_dir}" npx --yes skills add "${toolkit_repo}/${toolkit_skills_path}" \
+    SKILLS_DIR="${target_dir}" npx --yes skills add "${toolkit_repo}/${toolkit_skills_path}" --yes \
       2>&1 | grep -v "^npm warn" || true
     if [[ -d "${target_dir}/core-skills" || -d "${target_dir}/specialized-skills" ]]; then
       ok "AWS Agent Toolkit skills installed → ${target_dir}"
