@@ -1373,12 +1373,15 @@ check_bedrock_access() {
   esac
   local probe_model="${geo_prefix}.anthropic.claude-sonnet-4-6"
 
-  # Older AWS CLI builds lack `bedrock-runtime converse`; update in-place
-  if ! aws bedrock-runtime converse help >/dev/null 2>&1; then
-    warn "AWS CLI too old to test model invocation — updating AWS CLI..."
+  # Capability probe: --generate-cli-skeleton is offline and exits 0 iff the
+  # subcommand exists (unlike `aws ... help`, which needs groff and can fail
+  # on minimal systems even when the command is present). `converse` has been
+  # in CLI v2 for years; this only trips on genuinely ancient installs.
+  if ! aws bedrock-runtime converse --generate-cli-skeleton >/dev/null 2>&1; then
+    warn "AWS CLI lacks 'bedrock-runtime converse' — updating AWS CLI..."
     _update_aws_cli || true
     hash -r  # forget cached path in case the binary location changed
-    if ! aws bedrock-runtime converse help >/dev/null 2>&1; then
+    if ! aws bedrock-runtime converse --generate-cli-skeleton >/dev/null 2>&1; then
       BEDROCK_ACCESS_OK="unknown"
       warn "AWS CLI update failed or still lacks 'bedrock-runtime converse' — skipping invoke check."
       ok "Bedrock service reachable in ${probe_region}"
