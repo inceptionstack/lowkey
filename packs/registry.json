@@ -60,55 +60,6 @@
       "claude_code": false,
       "experimental": true
     },
-    "pi": {
-      "type": "agent",
-      "description": "Pi — minimal terminal coding harness (experimental)",
-      "deps": [
-        "bedrockify"
-      ],
-      "instance_type": "t4g.medium",
-      "root_volume_gb": 40,
-      "data_volume_gb": 0,
-      "default_model": "us.anthropic.claude-sonnet-4-6-v1",
-      "ports": {},
-      "brain": false,
-      "claude_code": false,
-      "experimental": true
-    },
-    "ironclaw": {
-      "type": "agent",
-      "description": "IronClaw — Rust-based AI agent by NEAR AI (experimental)",
-      "deps": [
-        "bedrockify"
-      ],
-      "instance_type": "t4g.medium",
-      "root_volume_gb": 40,
-      "data_volume_gb": 0,
-      "default_model": "us.anthropic.claude-sonnet-4-6-v1",
-      "ports": {},
-      "brain": false,
-      "claude_code": false,
-      "experimental": true
-    },
-    "nemoclaw": {
-      "type": "agent",
-      "description": "NemoClaw — OpenClaw in sandboxed OpenShell with Bedrock inference",
-      "deps": [
-        "bedrockify"
-      ],
-      "instance_type": "t4g.xlarge",
-      "root_volume_gb": 40,
-      "data_volume_gb": 80,
-      "default_model": "us.anthropic.claude-sonnet-4-6",
-      "ports": {},
-      "brain": true,
-      "claude_code": false,
-      "experimental": true,
-      "requires_docker": true,
-      "compatible_profiles": [
-        "personal_assistant"
-      ]
-    },
     "kiro-cli": {
       "type": "agent",
       "description": "Kiro CLI v2 — AWS agentic IDE terminal client with MCP server support (experimental, headless mode available via --kiro-api-key)",

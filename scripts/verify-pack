@@ -368,7 +368,7 @@ if bad:
     fi
   else
     warn_c "No test.sh — strongly recommended for CI"
-    hint "Create $pack_name/test.sh for offline validation (see ironclaw/test.sh or pi/test.sh as examples)"
+    hint "Create $pack_name/test.sh for offline validation (see an existing pack test.sh as an example)"
   fi
 }
 

@@ -559,7 +559,7 @@ _telem_pack() {
   case "$v" in
     builder|personal-assistant|account-assistant|essential|optional\
     |personal_assistant|account_assistant|openclaw|claude-code|codex-cli\
-    |kiro-cli|nemoclaw|hermes|pi|ironclaw|roundhouse)
+    |kiro-cli|hermes|roundhouse)
       printf '%s' "$v" ;;
   esac
 }
@@ -737,8 +737,7 @@ Options:
   --simple                       Force simple install mode
   --advanced                     Force advanced install mode
   --pack <name>                  Agent pack (openclaw, claude-code, codex-cli,
-                                 kiro-cli, nemoclaw, hermes, pi, ironclaw,
-                                 roundhouse)
+                                 kiro-cli, hermes, roundhouse)
   --profile <name>               Permission profile (builder,
                                  account_assistant, personal_assistant)
   --method <cfn|terraform|tf>    Deploy method (default: cfn)
@@ -1742,27 +1741,9 @@ choose_pack() {
 
 # Check pack/profile compatibility
 check_pack_profile_compat() {
-  if [[ "$PACK_NAME" == "nemoclaw" && "${PROFILE_NAME:-}" != "personal_assistant" ]]; then
-    if [[ "$INSTALL_MODE" == "simple" ]]; then
-      echo ""
-      echo -e "  ${RED}✗ NemoClaw requires the personal_assistant profile.${NC}"
-      echo "  Switching to personal_assistant automatically."
-      PROFILE_NAME="personal_assistant"
-      ok "Profile adjusted: ${PROFILE_NAME}"
-    else
-      echo ""
-      echo -e "  ${RED}✗ NemoClaw is only compatible with the personal_assistant profile.${NC}"
-      echo ""
-      echo "  NemoClaw runs the agent in an isolated sandbox that blocks all AWS API"
-      echo "  access. The ${PROFILE_NAME} profile requires AWS access to function."
-      echo ""
-      echo "  Options:"
-      echo "    • Use --pack openclaw with --profile ${PROFILE_NAME}"
-      echo "    • Use --pack nemoclaw with --profile personal_assistant"
-      echo ""
-      fail "Incompatible pack/profile combination: ${PACK_NAME} + ${PROFILE_NAME}"
-    fi
-  fi
+  # No pack-specific profile restrictions at present. Packs may declare
+  # compatible_profiles in packs/registry.yaml; add enforcement here if needed.
+  :
 }
 
 # ============================================================================
@@ -1954,12 +1935,10 @@ pack_default_model() {
     kiro-cli)                 echo "kiro-cloud" ;;  # Kiro uses its own inference; value is informational only
     openclaw)                 echo "us.anthropic.claude-opus-4-6-v1" ;;
     claude-code)              echo "us.anthropic.claude-sonnet-4-6" ;;
-    nemoclaw)                 echo "us.anthropic.claude-opus-4-6-v1" ;;
     # hermes depends on bedrockify; 'model' is the Bedrock id bedrockify
     # proxies to (NOT the Hermes-specific model ID, which is a separate
     # 'hermes-model' param on the pack).
     hermes)                   echo "us.anthropic.claude-opus-4-6-v1" ;;
-    pi|ironclaw)              echo "us.anthropic.claude-opus-4-6-v1" ;;
     *)                        echo "us.anthropic.claude-opus-4-6-v1" ;;
   esac
 }

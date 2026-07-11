@@ -290,13 +290,13 @@ fi
 cp "$WORK/bkup2.yaml" "$SB/packs/registry.yaml"
 
 # ── Test 14: compatible_profiles list round-trips ────────────────────────────
-header "Test 14 — nemoclaw.compatible_profiles list round-trips"
-# NemoClaw has compatible_profiles: [personal_assistant]
-NEMO=$(jq -c '.packs.nemoclaw.compatible_profiles' "$SB/packs/registry.json")
-if [[ "$NEMO" == '["personal_assistant"]' ]]; then
-  pass "nemoclaw.compatible_profiles preserved"
+header "Test 14 — roundhouse.compatible_profiles list round-trips"
+# Roundhouse has compatible_profiles: [builder]
+RH=$(jq -c '.packs.roundhouse.compatible_profiles' "$SB/packs/registry.json")
+if [[ "$RH" == '["builder"]' ]]; then
+  pass "roundhouse.compatible_profiles preserved"
 else
-  fail "nemoclaw.compatible_profiles wrong: got $NEMO"
+  fail "roundhouse.compatible_profiles wrong: got $RH"
 fi
 
 # ── Test 15: defaults section present ────────────────────────────────────────

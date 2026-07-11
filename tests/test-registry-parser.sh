@@ -74,10 +74,9 @@ fi
 assert_contains "includes openclaw" "openclaw|" "$output"
 assert_contains "includes claude-code" "claude-code|" "$output"
 assert_contains "includes hermes" "hermes|" "$output"
-assert_contains "includes pi" "pi|" "$output"
-assert_contains "includes ironclaw" "ironclaw|" "$output"
-assert_contains "includes nemoclaw" "nemoclaw|" "$output"
 assert_contains "includes kiro-cli" "kiro-cli|" "$output"
+removed_packs=$(echo "$output" | grep -c -E '^(pi|ironclaw|nemoclaw)\|' || true)
+assert_eq "excludes removed packs (pi/ironclaw/nemoclaw)" "0" "$removed_packs"
 bedrockify_as_pack=$(echo "$output" | grep -c '^bedrockify|' || true)
 assert_eq "excludes base packs (bedrockify)" "0" "$bedrockify_as_pack"
 
@@ -86,16 +85,15 @@ echo ""
 echo "=== Test: experimental flag detection ==="
 assert_contains "openclaw is not experimental" "openclaw|OpenClaw" "$output"
 assert_contains "openclaw experimental=false" "|false" "$(echo "$output" | grep openclaw)"
-assert_contains "pi is experimental" "|true" "$(echo "$output" | grep '^pi|')"
-assert_contains "ironclaw is experimental" "|true" "$(echo "$output" | grep ironclaw)"
+assert_contains "hermes is experimental" "|true" "$(echo "$output" | grep '^hermes|')"
+assert_contains "kiro-cli is experimental" "|true" "$(echo "$output" | grep '^kiro-cli|')"
 
 # ---- Test: instance_type lookup ---------------------------------------------
 echo ""
 echo "=== Test: instance_type lookup ==="
 assert_eq "openclaw → t4g.xlarge" "t4g.xlarge" "$(get_value "$REGISTRY" openclaw instance_type)"
 assert_eq "hermes → t4g.medium" "t4g.medium" "$(get_value "$REGISTRY" hermes instance_type)"
-assert_eq "pi → t4g.medium" "t4g.medium" "$(get_value "$REGISTRY" pi instance_type)"
-assert_eq "ironclaw → t4g.medium" "t4g.medium" "$(get_value "$REGISTRY" ironclaw instance_type)"
+assert_eq "roundhouse → t4g.medium" "t4g.medium" "$(get_value "$REGISTRY" roundhouse instance_type)"
 
 # ---- Test: get arbitrary keys -----------------------------------------------
 echo ""
