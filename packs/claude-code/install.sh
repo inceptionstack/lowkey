@@ -135,7 +135,7 @@ fi
 mkdir -p "$(dirname "${PROFILE_TARGET}")"
 cat > "${PROFILE_TARGET}" <<EOF
 # Claude Code — Bedrock configuration
-# Managed by loki-agent packs/claude-code/install.sh — do not edit manually.
+# Managed by lowkey packs/claude-code/install.sh — do not edit manually.
 export PATH="\${HOME}/.local/bin:\${PATH}"
 export CLAUDE_CODE_USE_BEDROCK=1
 export AWS_REGION="${REGION}"

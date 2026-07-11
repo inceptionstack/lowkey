@@ -672,7 +672,7 @@ step "Phase 3: Post-Install"
 BRAIN_FLAG="$(registry_get_flag "${PACK_NAME}" "brain")"
 if [[ "${BRAIN_FLAG}" == "true" ]]; then
   step "InceptionStack Brain"
-  BRAIN_REPO="https://raw.githubusercontent.com/inceptionstack/loki-agent/main/deploy/brain"
+  BRAIN_REPO="https://raw.githubusercontent.com/inceptionstack/lowkey/main/deploy/brain"
   BRAIN_DEST="/home/ec2-user/.openclaw/workspace"
   mkdir -p "${BRAIN_DEST}"
   for bf in SOUL.md IDENTITY.md USER.md TOOLS.md AGENTS.md CLAUDE.md PROJECT-GUIDELINES.md HEARTBEAT.md APP-REGISTRY.md; do

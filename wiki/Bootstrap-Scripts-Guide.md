@@ -1,6 +1,6 @@
 # Bootstrap Scripts Guide
 
-After deploying Loki, bootstrap scripts configure your agent with security baselines, development tools, and integrations. These scripts live in the `bootstraps/` directory of the [loki-agent](https://github.com/inceptionstack/loki-agent) repository, organized into three subdirectories:
+After deploying Loki, bootstrap scripts configure your agent with security baselines, development tools, and integrations. These scripts live in the `bootstraps/` directory of the [lowkey](https://github.com/inceptionstack/lowkey) repository, organized into three subdirectories:
 
 - **`bootstraps/essential/`** — Core setup that every Loki instance needs
 - **`bootstraps/optional/`** — Add-ons based on your workflow

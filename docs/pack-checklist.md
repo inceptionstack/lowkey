@@ -1,6 +1,6 @@
 # Pack Checklist — Creating a New Loki Agent Pack
 
-This document defines everything needed to create a new pack for the loki-agent deployer.
+This document defines everything needed to create a new pack for the lowkey deployer.
 Use `scripts/verify-pack` to validate your pack before submitting.
 
 ```bash

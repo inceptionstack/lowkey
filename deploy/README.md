@@ -1,6 +1,6 @@
 # Deploy Loki on AWS
 
-Deploy a fully configured [Loki](https://github.com/inceptionstack/loki-agent) (powered by [OpenClaw](https://github.com/openclaw/openclaw)) AI assistant on your own AWS account. Choose your preferred IaC tool — all three options deploy identical infrastructure.
+Deploy a fully configured [Loki](https://github.com/inceptionstack/lowkey) (powered by [OpenClaw](https://github.com/openclaw/openclaw)) AI assistant on your own AWS account. Choose your preferred IaC tool — all three options deploy identical infrastructure.
 
 ## Prerequisites
 
@@ -45,7 +45,7 @@ All three methods create the same architecture:
 | `EnableInspector` | `true` | Amazon Inspector vulnerability scanning. (~$0.01-$1.25 per resource/month) |
 | `EnableAccessAnalyzer` | `true` | IAM Access Analyzer finds external shares. (Free) |
 | `EnableConfigRecorder` | `true` | AWS Config records configuration changes. (~$0.003 per item/month) |
-| `LokiWatermark` | `loki-agent` | Custom identifier tag on all resources |
+| `LokiWatermark` | `lowkey` | Custom identifier tag on all resources |
 
 ## Post-Deployment
 
@@ -104,7 +104,7 @@ Browse the `optional/` folder for additional capabilities:
 | `BOOTSTRAP-GITHUBACTION-CODE-REVIEW.md` | Automatic PR code review with Claude |
 | `OPTIMIZE-TOO-LARGE-CONTEXT.md` | Context window optimization tips |
 
-Full details: [Bootstrap Scripts Guide](https://github.com/inceptionstack/loki-agent/wiki/Bootstrap-Scripts-Guide)
+Full details: [Bootstrap Scripts Guide](https://github.com/inceptionstack/lowkey/wiki/Bootstrap-Scripts-Guide)
 
 ## Shared Files
 

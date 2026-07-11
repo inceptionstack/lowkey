@@ -199,7 +199,7 @@ generate_bedrock_profile() {
   local HAIKU_MODEL="$3"
   cat <<EOF
 # Claude Code — Bedrock configuration
-# Managed by loki-agent packs/claude-code/install.sh — do not edit manually.
+# Managed by lowkey packs/claude-code/install.sh — do not edit manually.
 export CLAUDE_CODE_USE_BEDROCK=1
 export AWS_REGION="${REGION}"
 export ANTHROPIC_MODEL="${MODEL}"

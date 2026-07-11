@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Lowkey Agent — One-Shot Installer
-# Usage: curl -sfL https://raw.githubusercontent.com/inceptionstack/loki-agent/main/install.sh -o /tmp/loki-install.sh && bash /tmp/loki-install.sh
+# Usage: curl -sfL https://raw.githubusercontent.com/inceptionstack/lowkey/main/install.sh -o /tmp/lowkey-install.sh && bash /tmp/lowkey-install.sh
 # Flags: --non-interactive / -y  Accept all defaults, minimal prompts
 #        --pack <name>           Pre-select agent pack (e.g. --pack claude-code, --pack openclaw)
 #        --method <m>            Pre-select deploy method: cfn, terraform (or tf)
@@ -24,7 +24,7 @@ export PAGER=""
 aws() { command aws --no-cli-pager "$@"; }
 
 # Persistent log file for debugging (survives script exit)
-INSTALL_LOG="/tmp/loki-install.log"
+INSTALL_LOG="/tmp/lowkey-install.log"
 : > "$INSTALL_LOG"
 
 show_debug_locations() {
@@ -68,9 +68,9 @@ trap '
 # Track which step we're in (for failure attribution in telemetry)
 _TELEM_CURRENT_STEP="init"
 
-REPO_URL="https://github.com/inceptionstack/loki-agent.git"
-DOCS_URL="https://github.com/inceptionstack/loki-agent/wiki"
-TEMPLATE_RAW_URL="https://raw.githubusercontent.com/inceptionstack/loki-agent/main/deploy/cloudformation/template.yaml"
+REPO_URL="https://github.com/inceptionstack/lowkey.git"
+DOCS_URL="https://github.com/inceptionstack/lowkey/wiki"
+TEMPLATE_RAW_URL="https://raw.githubusercontent.com/inceptionstack/lowkey/main/deploy/cloudformation/template.yaml"
 SSM_DOC_NAME=""
 INSTALLER_VERSION="0.5.186"
 
@@ -104,7 +104,7 @@ _telem_event()              { :; }
 # ── Config ──────────────────────────────────────────────────────────────
 _TELEM_ENDPOINT="${LOWKEY_TELEMETRY_URL:-https://telemetry.loki.run}"
 _TELEM_TIMEOUT=2          # seconds — curl connect + transfer
-_TELEM_LOG="${INSTALL_LOG:-/tmp/loki-install.log}"
+_TELEM_LOG="${INSTALL_LOG:-/tmp/lowkey-install.log}"
 _TELEM_QUEUE="/tmp/.lowkey-telem-$$"   # per-process event queue (NDJSON)
 _TELEM_ENABLED=true
 _TELEM_INSTALL_ID=""
@@ -1297,7 +1297,7 @@ preflight_checks() {
 
   if [[ "$DEBUG_IN_REPO" == "true" ]]; then
     git rev-parse --show-toplevel &>/dev/null \
-      || fail "--debug-in-repo requires running from inside the loki-agent repo directory."
+      || fail "--debug-in-repo requires running from inside the lowkey repo directory."
     ok "Debug mode: repo root is $(pwd)"
     info "Debug log: ${INSTALL_LOG}"
   fi
@@ -1642,8 +1642,8 @@ PACK_EXPERIMENTAL=()
 load_pack_registry() {
   _PACK_REGISTRY="${CLONE_DIR:-}/packs/registry.json"
   if [[ ! -f "$_PACK_REGISTRY" ]]; then
-    local registry_url="https://raw.githubusercontent.com/inceptionstack/loki-agent/main/packs/registry.json"
-    _PACK_REGISTRY="/tmp/loki-registry-$$.json"
+    local registry_url="https://raw.githubusercontent.com/inceptionstack/lowkey/main/packs/registry.json"
+    _PACK_REGISTRY="/tmp/lowkey-registry-$$.json"
     curl -sfL "$registry_url" -o "$_PACK_REGISTRY" 2>/dev/null || _PACK_REGISTRY=""
   fi
   PACK_NAMES=()
@@ -2078,7 +2078,7 @@ show_summary() {
 # ============================================================================
 prepare_repo() {
   echo ""
-  CLONE_DIR="/tmp/loki-agent-$$"
+  CLONE_DIR="/tmp/lowkey-$$"
   dbg "prepare_repo: CLONE_DIR=$CLONE_DIR DEBUG_IN_REPO=$DEBUG_IN_REPO"
 
   if [[ "$DEBUG_IN_REPO" == "true" ]]; then
@@ -2091,7 +2091,7 @@ prepare_repo() {
     ok "Local repo cloned: ${CLONE_DIR}"
   else
     echo ""
-    info "Cloning loki-agent into ${CLONE_DIR}..."
+    info "Cloning lowkey into ${CLONE_DIR}..."
 
     if [[ -d "$CLONE_DIR/.git" ]]; then
       info "Directory exists, syncing to latest..."
@@ -2142,18 +2142,18 @@ deploy_console() {
   local bucket="${ENV_NAME}-cfn-templates-${ACCOUNT_ID}"
   create_s3_bucket "$bucket" "$DEPLOY_REGION"
 
-  local tmp; tmp=$(mktemp /tmp/loki-cfn-template.XXXXXX.yaml)
+  local tmp; tmp=$(mktemp /tmp/lowkey-cfn-template.XXXXXX.yaml)
   run_or_fail "Downloading template" curl -sfL "$TEMPLATE_RAW_URL" -o "$tmp"
   rm -f "$_RUN_LOG"
 
   run_or_fail "Uploading template to S3" \
-    aws s3 cp "$tmp" "s3://${bucket}/loki-agent/template.yaml" --region "$DEPLOY_REGION"
+    aws s3 cp "$tmp" "s3://${bucket}/lowkey/template.yaml" --region "$DEPLOY_REGION"
   rm -f "$_RUN_LOG"
   rm -f "$tmp"
 
   # Generate a pre-signed URL (valid 1 hour) since the bucket blocks public access
   local s3_url
-  s3_url=$(aws s3 presign "s3://${bucket}/loki-agent/template.yaml" \
+  s3_url=$(aws s3 presign "s3://${bucket}/lowkey/template.yaml" \
     --expires-in 3600 --region "$DEPLOY_REGION") \
     || fail "Could not generate pre-signed URL for template"
   local encoded
@@ -2442,7 +2442,7 @@ terraform_init() {
     warn "Low disk space (${avail_mb}MB available) — Terraform providers need ~500MB"
     if [[ "$IS_CLOUDSHELL" == "true" ]]; then
       info "CloudShell detected — moving Terraform workdir to /tmp"
-      TF_WORKDIR="/tmp/loki-terraform-$$"
+      TF_WORKDIR="/tmp/lowkey-terraform-$$"
       mkdir -p "$TF_WORKDIR"
       cp -a . "$TF_WORKDIR/"
       cd "$TF_WORKDIR"
@@ -2454,7 +2454,7 @@ terraform_init() {
 
   info "Initializing Terraform (downloading providers)..."
   dbg "run_or_fail: Terraform init -> terraform init -input=false"
-  local _init_log="/tmp/loki-tf-init-$$.log"
+  local _init_log="/tmp/lowkey-tf-init-$$.log"
   : > "$_init_log"
   terraform init -input=false > "$_init_log" 2>&1 &
   local tf_pid=$!
@@ -2501,7 +2501,7 @@ terraform_apply() {
     tf_vars+=("$v")
   done < <(format_tf_vars)
   # Stream terraform apply live — run in background so Ctrl-C works
-  _TF_LOG="/tmp/loki-terraform-apply.log"
+  _TF_LOG="/tmp/lowkey-terraform-apply.log"
   : > "$_TF_LOG"
   terraform apply -auto-approve "${tf_vars[@]}" > "$_TF_LOG" 2>&1 &
   local tf_pid=$!
@@ -2742,7 +2742,7 @@ show_complete() {
   copy_to_clipboard "$ssm_cmd" && ok "Connect command copied to clipboard"
   echo ""
 
-  safe_cleanup_dir "${CLONE_DIR:-}" "cloned repo directory" '/tmp/*' "$HOME/.*" '*/loki-agent'
+  safe_cleanup_dir "${CLONE_DIR:-}" "cloned repo directory" '/tmp/*' "$HOME/.*" '*/lowkey'
   safe_cleanup_dir "${TF_WORKDIR:-}" "temp Terraform workdir" '/tmp/*'
 }
 

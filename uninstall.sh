@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Loki Agent — Uninstaller
-# Usage: bash <(curl -sfL https://raw.githubusercontent.com/inceptionstack/loki-agent/main/uninstall.sh)
+# Lowkey — Uninstaller
+# Usage: bash <(curl -sfL https://raw.githubusercontent.com/inceptionstack/lowkey/main/uninstall.sh)
 #
-# Finds all Loki deployments in your account (by loki:managed tag),
+# Finds all Lowkey deployments in your account (by loki:managed tag),
 # lets you pick which to remove, and cleans up all resources.
 set -euo pipefail
 export AWS_PAGER=""
@@ -11,7 +11,7 @@ export PAGER=""
 aws() { command aws --no-cli-pager "$@"; }
 
 UNINSTALLER_VERSION="0.1.0"
-REPO_URL="https://github.com/inceptionstack/loki-agent.git"
+REPO_URL="https://github.com/inceptionstack/lowkey.git"
 DEFAULT_TF_STATE_KEY="loki-agent/terraform.tfstate"
 
 # ============================================================================
@@ -104,11 +104,11 @@ tf_state_exists() {
 show_banner() {
   echo ""
   echo -e "${RED}╔══════════════════════════════════════════════╗${NC}"
-  echo -e "${RED}║     🗑️  Loki Agent — Uninstaller             ║${NC}"
+  echo -e "${RED}║     🗑️  Lowkey — Uninstaller                  ║${NC}"
   printf "${RED}║${NC}  %-42s${RED}║${NC}\n" "v${UNINSTALLER_VERSION}"
   echo -e "${RED}╚══════════════════════════════════════════════╝${NC}"
   echo ""
-  warn "This script ${BOLD}permanently destroys${NC}${YELLOW} Loki deployments and all their resources."
+  warn "This script ${BOLD}permanently destroys${NC}${YELLOW} Lowkey deployments and all their resources."
   warn "There is NO undo. Data on EC2 instances will be LOST."
   echo ""
 }
@@ -138,7 +138,7 @@ preflight() {
 discover_deployments() {
   prompt "AWS region to scan" SCAN_REGION "$REGION"
   echo ""
-  info "Scanning for Loki deployments in ${SCAN_REGION}..."
+  info "Scanning for Lowkey deployments in ${SCAN_REGION}..."
 
   local raw
   raw=$(aws ec2 describe-vpcs \
@@ -148,7 +148,7 @@ discover_deployments() {
     --output text 2>/dev/null || echo "")
 
   if [[ -z "$raw" ]]; then
-    ok "No Loki deployments found in ${SCAN_REGION}"
+    ok "No Lowkey deployments found in ${SCAN_REGION}"
     exit 0
   fi
 
@@ -177,7 +177,7 @@ discover_deployments() {
 
 print_deployments() {
   echo ""
-  echo -e "  ${BOLD}Found ${DEPLOY_COUNT} Loki deployment(s):${NC}"
+  echo -e "  ${BOLD}Found ${DEPLOY_COUNT} Lowkey deployment(s):${NC}"
   echo ""
   for i in $(seq 0 $((DEPLOY_COUNT - 1))); do
     echo -e "    ${BOLD}$((i+1)))${NC} ${VPC_IDS[$i]}  watermark=${YELLOW}${WATERMARKS[$i]}${NC}  method=${METHODS[$i]}  name=${NAMES[$i]}"
@@ -359,8 +359,8 @@ try_terraform_destroy() {
 
   info "Using terraform destroy (state: s3://${_TF_BUCKET}/${_TF_KEY})"
 
-  local tf_dir; tf_dir="$(mktemp -d)/loki-agent"
-  info "Cloning loki-agent for Terraform config..."
+  local tf_dir; tf_dir="$(mktemp -d)/lowkey"
+  info "Cloning lowkey for Terraform config..."
   git clone --depth 1 "$REPO_URL" "$tf_dir" 2>&1 | tail -1
   cd "$tf_dir/deploy/terraform"
 
@@ -630,7 +630,7 @@ offer_state_cleanup() {
 show_done() {
   echo ""
   echo -e "${GREEN}╔══════════════════════════════════════════════╗${NC}"
-  echo -e "${GREEN}║     ✅ Loki deployment(s) removed            ║${NC}"
+  echo -e "${GREEN}║     ✅ Lowkey deployment(s) removed            ║${NC}"
   echo -e "${GREEN}╚══════════════════════════════════════════════╝${NC}"
   echo ""
   echo -e "  Removed ${#TARGETS[@]} deployment(s) from account ${ACCOUNT_ID} in ${SCAN_REGION}"

@@ -401,7 +401,7 @@ Lowkey isn't a one-shot tool you open when you need something. It's an always-on
 
 ## How It Works
 
-Lowkey is built on [OpenClaw](https://github.com/openclaw/openclaw), the open-source AI agent framework. The [loki-agent](https://github.com/inceptionstack/lowkey) repository packages everything needed to deploy a production-ready Lowkey instance:
+Lowkey is built on [OpenClaw](https://github.com/openclaw/openclaw), the open-source AI agent framework. The [lowkey](https://github.com/inceptionstack/lowkey) repository packages everything needed to deploy a production-ready Lowkey instance:
 
 **1. One-click deployment.** Choose your IaC tool  (CloudFormation, SAM, or Terraform) and deploy. The template creates an isolated VPC, a T4g.xlarge EC2 instance by default (recommended so it can really do things like build run tests, build code, dockerize things and more, as a real dev machine), IAM roles, security services, and installs Lowkey with a pre-configured workspace. Total deploy time: \~4-10 minutes.
 
@@ -519,7 +519,7 @@ Built on [OpenClaw](https://github.com/openclaw/openclaw), [Hermes](https://gith
 
 | Repo | Description |
 |------|-------------|
-| **[loki-agent](https://github.com/inceptionstack/lowkey)** | Deploy templates (CloudFormation, SAM, Terraform), pack system, bootstrap scripts, brain files |
+| **[lowkey](https://github.com/inceptionstack/lowkey)** | Deploy templates (CloudFormation, SAM, Terraform), pack system, bootstrap scripts, brain files |
 | **[loki-skills](https://github.com/inceptionstack/loki-skills)** | Agent skills library — AWS infrastructure, observability, payments, and more (OpenClaw + Hermes) |
 | **[bedrockify](https://github.com/inceptionstack/bedrockify)** | OpenAI-compatible proxy for Amazon Bedrock — chat completions + embeddings in one binary |
 | **[ai-patterns](https://github.com/inceptionstack/ai-patterns)** | AI Agent Architecture Patterns — definitions, naming, and design considerations |

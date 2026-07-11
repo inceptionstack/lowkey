@@ -122,7 +122,7 @@ Telemetry includes: `installer_version`, `installer_channel`, `installer_commit`
 Today the installer fetches from `main`:
 ```bash
 TEMPLATE_RAW_URL="https://raw.githubusercontent.com/.../main/deploy/cloudformation/template.yaml"
-REPO_URL="https://github.com/inceptionstack/loki-agent.git"  # clones main
+REPO_URL="https://github.com/inceptionstack/lowkey.git"  # clones main
 ```
 
 For stable, all raw URLs, git clones, template fetches, and pack resources

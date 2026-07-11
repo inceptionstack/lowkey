@@ -308,7 +308,7 @@ Parameters:
 
   LokiWatermark:
     Type: String
-    Default: 'loki-agent'
+    Default: 'lowkey'
     Description: "Custom identifier tag applied to all resources. Use to distinguish multiple Loki deployments or mark team ownership (e.g. 'team-alpha', 'dev-loki')."
 
   ExistingVpcId:
@@ -1123,14 +1123,14 @@ Resources:
           # Clone repo with retry (GitHub blips shouldn't kill bootstrap)
           _cloned=false
           for _attempt in 1 2 3; do
-            git clone --depth 1 -b "${RepoBranch}" https://github.com/inceptionstack/loki-agent.git /tmp/loki-agent && _cloned=true && break
+            git clone --depth 1 -b "${RepoBranch}" https://github.com/inceptionstack/lowkey.git /tmp/lowkey && _cloned=true && break
             echo "git clone failed (attempt $_attempt), retrying in 10s..." && sleep 10
           done
           if [[ "$_cloned" != "true" ]]; then
             echo "FATAL: git clone failed after 3 attempts" >&2
             exit 1
           fi
-          bash /tmp/loki-agent/deploy/bootstrap.sh \
+          bash /tmp/lowkey/deploy/bootstrap.sh \
             --pack "$PACK_NAME" \
             --profile "$PROFILE_NAME" \
             --region "$BEDROCK_REGION" \

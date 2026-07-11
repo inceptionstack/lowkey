@@ -235,7 +235,7 @@ variable "enable_config_recorder" {
 
 variable "loki_watermark" {
   type        = string
-  default     = "loki-agent"
+  default     = "lowkey"
   description = "Custom identifier tag applied to all resources. Use to distinguish multiple Loki deployments or mark team ownership (e.g. 'team-alpha', 'dev-loki')."
 }
 
