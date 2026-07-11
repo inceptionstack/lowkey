@@ -35,7 +35,7 @@ All three methods create the same architecture:
 | `InstanceType` | `t4g.xlarge` | EC2 instance type (ARM64 Graviton only) |
 | `ProfileName` | *(required)* | Permission profile: `builder` (AdministratorAccess), `account_assistant` (ReadOnly), `personal_assistant` (Bedrock only) |
 | `ModelMode` | `bedrock` | `bedrock` (IAM), `litellm` (proxy), or `api-key` (direct) |
-| `DefaultModel` | `us.anthropic.claude-opus-4-6-v1` | Bedrock model ID |
+| `DefaultModel` | `us.anthropic.claude-sonnet-4-6` | Bedrock model ID |
 | `BedrockRegion` | `us-east-1` | Region for Bedrock API calls |
 | `SSHAllowedCidr` | `127.0.0.1/32` | SSH access CIDR (disabled by default — use SSM) |
 | `LiteLLMBaseUrl` | *(empty)* | LiteLLM proxy URL (only when `ModelMode=litellm`) |

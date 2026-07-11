@@ -22,7 +22,7 @@ source "${SCRIPT_DIR}/../common.sh"
 # Defaults from config file (written by bootstrap dispatcher), then CLI overrides
 PACK_ARG_REGION="$(pack_config_get region "us-east-1")"
 PACK_ARG_PORT="$(pack_config_get bedrockify_port "8090")"
-PACK_ARG_MODEL="$(pack_config_get model "us.anthropic.claude-opus-4-6-v1")"
+PACK_ARG_MODEL="$(pack_config_get model "us.anthropic.claude-sonnet-4-6")"
 PACK_ARG_EMBED_MODEL="$(pack_config_get embed_model "amazon.titan-embed-text-v2:0")"
 
 # ── Help ──────────────────────────────────────────────────────────────────────
@@ -35,7 +35,7 @@ Install bedrockify as a systemd daemon (OpenAI-compatible Bedrock proxy).
 Options:
   --region       AWS region for Bedrock           (default: us-east-1)
   --port         Port to listen on                (default: 8090)
-  --model        Default Bedrock chat model       (default: us.anthropic.claude-opus-4-6-v1)
+  --model        Default Bedrock chat model       (default: us.anthropic.claude-sonnet-4-6)
   --embed-model  Default Bedrock embedding model  (default: amazon.titan-embed-text-v2:0)
   --help         Show this help message
 

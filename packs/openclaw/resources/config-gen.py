@@ -15,7 +15,7 @@ gw_token = os.environ.get("GW_TOKEN_ENV") or sys.argv[4]
 model_mode = sys.argv[5] if len(sys.argv) > 5 else "bedrock"
 litellm_url = sys.argv[6] if len(sys.argv) > 6 else ""
 litellm_key = os.environ.get("LITELLM_KEY_ENV") or (sys.argv[7] if len(sys.argv) > 7 else "")
-litellm_model = sys.argv[8] if len(sys.argv) > 8 else "claude-opus-4-6"
+litellm_model = sys.argv[8] if len(sys.argv) > 8 else "claude-sonnet-4-6"
 provider_key = os.environ.get("PROVIDER_KEY_ENV") or (sys.argv[9] if len(sys.argv) > 9 else "")
 home = os.path.expanduser("~")
 
@@ -65,7 +65,7 @@ if model_mode == "litellm" and litellm_url and litellm_key:
   cfg["agents"]["defaults"]["model"] = {"primary": f"litellm/{litellm_model}", "fallbacks": ["litellm/claude-sonnet-4-6", PRIMARY_MODEL]}
 elif model_mode == "api-key" and provider_key:
   cfg["models"]["providers"]["anthropic"] = {"apiKey": provider_key, "models": []}
-  cfg["agents"]["defaults"]["model"] = {"primary": "anthropic/claude-opus-4-6-20260514", "fallbacks": ["anthropic/claude-sonnet-4-6-20260514", PRIMARY_MODEL]}
+  cfg["agents"]["defaults"]["model"] = {"primary": "anthropic/claude-sonnet-4-6-20260514", "fallbacks": ["anthropic/claude-opus-4-6-20260514", PRIMARY_MODEL]}
 
 with open(f"{home}/.openclaw/openclaw.json", "w") as f:
   json.dump(cfg, f, indent=2)

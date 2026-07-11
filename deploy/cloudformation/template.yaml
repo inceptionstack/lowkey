@@ -215,8 +215,8 @@ Parameters:
 
   DefaultModel:
     Type: String
-    Default: 'us.anthropic.claude-opus-4-6-v1'
-    Description: "The primary AI model. Claude Opus 4.6 is recommended for best performance. Used when ModelMode is 'bedrock'."
+    Default: 'us.anthropic.claude-sonnet-4-6'
+    Description: "The primary AI model. Claude Sonnet 4.6 is recommended (best cost/performance balance). Used when ModelMode is 'bedrock'."
 
   ModelMode:
     Type: String
@@ -240,8 +240,8 @@ Parameters:
 
   LiteLLMModel:
     Type: String
-    Default: 'claude-opus-4-6'
-    Description: "Default model alias on your LiteLLM proxy (e.g. 'claude-opus-4-6'). Only used when Model Access Mode is 'litellm'."
+    Default: 'claude-sonnet-4-6'
+    Description: "Default model alias on your LiteLLM proxy (e.g. 'claude-sonnet-4-6'). Only used when Model Access Mode is 'litellm'."
 
   ProviderApiKey:
     Type: String

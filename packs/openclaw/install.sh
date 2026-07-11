@@ -29,7 +29,7 @@ PACK_ARG_TOKEN="$(pack_config_get gw_token "")"
 PACK_ARG_MODEL_MODE="$(pack_config_get model_mode "bedrock")"
 PACK_ARG_LITELLM_URL="$(pack_config_get litellm_url "")"
 PACK_ARG_LITELLM_KEY="$(pack_config_get litellm_key "")"
-PACK_ARG_LITELLM_MODEL="$(pack_config_get litellm_model "claude-opus-4-6")"
+PACK_ARG_LITELLM_MODEL="$(pack_config_get litellm_model "claude-sonnet-4-6")"
 PACK_ARG_PROVIDER_KEY="$(pack_config_get provider_key "")"
 PACK_ARG_SKIP_TELEMETRON="$(pack_config_get "skip-telemetron" "false")"
 
@@ -48,7 +48,7 @@ Options:
   --model-mode     bedrock | litellm | api-key   (default: bedrock)
   --litellm-url    LiteLLM base URL (litellm mode)
   --litellm-key    LiteLLM API key  (litellm mode)
-  --litellm-model  LiteLLM model ID (litellm mode, default: claude-opus-4-6)
+  --litellm-model  LiteLLM model ID (litellm mode, default: claude-sonnet-4-6)
   --provider-key   Anthropic API key (provider-key mode)
   --skip-telemetron  Skip the telemetron metrics sidecar (default: false)
   --help           Show this help message

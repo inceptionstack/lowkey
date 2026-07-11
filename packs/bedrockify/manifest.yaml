@@ -22,7 +22,7 @@ params:
     default: "8090"
   - name: model
     description: "Default Bedrock chat model"
-    default: "us.anthropic.claude-opus-4-6-v1"
+    default: "us.anthropic.claude-sonnet-4-6"
   - name: embed-model
     description: "Default Bedrock embedding model"
     default: "amazon.titan-embed-text-v2:0"

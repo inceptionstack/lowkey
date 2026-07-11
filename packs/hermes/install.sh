@@ -35,7 +35,7 @@ Options:
 
 Examples:
   ./install.sh --region us-east-1
-  ./install.sh --hermes-model us.anthropic.claude-opus-4-6-v1 --region us-west-2
+  ./install.sh --hermes-model us.anthropic.claude-sonnet-4-6 --region us-west-2
 EOF
 }
 

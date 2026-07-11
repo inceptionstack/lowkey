@@ -99,7 +99,7 @@ All --key value arguments are forwarded to pack install.sh scripts.
 Packs silently ignore arguments they don't recognise.
 
 Examples:
-  $(basename "$0") --pack openclaw --region us-east-1 --model us.anthropic.claude-opus-4-6-v1
+  $(basename "$0") --pack openclaw --region us-east-1 --model us.anthropic.claude-sonnet-4-6
   $(basename "$0") --pack hermes   --region eu-west-1
 
 Environment:

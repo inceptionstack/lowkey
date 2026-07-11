@@ -122,8 +122,8 @@ variable "bedrock_region" {
 
 variable "default_model" {
   type        = string
-  default     = "us.anthropic.claude-opus-4-6-v1"
-  description = "The primary AI model. Claude Opus 4.6 is recommended for best performance. Used when ModelMode is 'bedrock'."
+  default     = "us.anthropic.claude-sonnet-4-6"
+  description = "The primary AI model. Claude Sonnet 4.6 is recommended (best cost/performance balance). Used when ModelMode is 'bedrock'."
 }
 
 variable "model_mode" {
@@ -152,8 +152,8 @@ variable "litellm_api_key" {
 
 variable "litellm_model" {
   type        = string
-  default     = "claude-opus-4-6"
-  description = "Default model alias on your LiteLLM proxy (e.g. 'claude-opus-4-6'). Only used when Model Access Mode is 'litellm'."
+  default     = "claude-sonnet-4-6"
+  description = "Default model alias on your LiteLLM proxy (e.g. 'claude-sonnet-4-6'). Only used when Model Access Mode is 'litellm'."
 }
 
 variable "provider_api_key" {

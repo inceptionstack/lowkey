@@ -99,7 +99,7 @@ assert_eq "roundhouse → t4g.medium" "t4g.medium" "$(get_value "$REGISTRY" roun
 echo ""
 echo "=== Test: get arbitrary keys ==="
 assert_contains "openclaw description" "OpenClaw" "$(get_value "$REGISTRY" openclaw description)"
-assert_eq "openclaw default_model" "us.anthropic.claude-opus-4-6-v1" "$(get_value "$REGISTRY" openclaw default_model)"
+assert_eq "openclaw default_model" "us.anthropic.claude-sonnet-4-6" "$(get_value "$REGISTRY" openclaw default_model)"
 assert_eq "openclaw brain" "true" "$(get_value "$REGISTRY" openclaw brain)"
 
 # ---- Test: nonexistent pack/key returns empty -------------------------------

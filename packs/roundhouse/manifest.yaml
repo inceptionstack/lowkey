@@ -25,7 +25,7 @@ params:
     required: true
   - name: model
     description: "AI model ID for the agent"
-    default: "us.anthropic.claude-opus-4-6-v1"
+    default: "us.anthropic.claude-sonnet-4-6"
   - name: skip-telemetron
     description: "Skip telemetron metrics sidecar installation"
     default: "false"

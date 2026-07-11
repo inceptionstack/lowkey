@@ -37,7 +37,7 @@
       "instance_type": "t4g.xlarge",
       "root_volume_gb": 40,
       "data_volume_gb": 80,
-      "default_model": "us.anthropic.claude-opus-4-6-v1",
+      "default_model": "us.anthropic.claude-sonnet-4-6",
       "ports": {
         "gateway": 3001
       },
@@ -54,7 +54,7 @@
       "instance_type": "t4g.medium",
       "root_volume_gb": 40,
       "data_volume_gb": 0,
-      "default_model": "global.anthropic.claude-opus-4-6-v1",
+      "default_model": "global.anthropic.claude-sonnet-4-6",
       "ports": {},
       "brain": false,
       "claude_code": false,
@@ -93,7 +93,7 @@
       "instance_type": "t4g.medium",
       "root_volume_gb": 40,
       "data_volume_gb": 0,
-      "default_model": "us.anthropic.claude-opus-4-6-v1",
+      "default_model": "us.anthropic.claude-sonnet-4-6",
       "ports": {},
       "brain": false,
       "claude_code": false,

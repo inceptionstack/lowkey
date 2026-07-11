@@ -27,7 +27,7 @@ source "${SCRIPT_DIR}/../common.sh"
 PACK_ARG_TELEGRAM_BOT_TOKEN="$(pack_config_get telegram_bot_token "")"
 PACK_ARG_TELEGRAM_BOT_TOKEN_SECRET="$(pack_config_get telegram_bot_token_secret "")"
 PACK_ARG_TELEGRAM_USER="$(pack_config_get telegram_user "")"
-PACK_ARG_MODEL="$(pack_config_get model "us.anthropic.claude-opus-4-6-v1")"
+PACK_ARG_MODEL="$(pack_config_get model "us.anthropic.claude-sonnet-4-6")"
 PACK_ARG_SKIP_TELEMETRON="$(pack_config_get "skip-telemetron" "false")"
 
 # ── Help ──────────────────────────────────────────────────────────────────────
@@ -41,7 +41,7 @@ Options:
   --telegram-bot-token         Telegram bot token (plaintext, for dev/test)
   --telegram-bot-token-secret  AWS Secrets Manager secret id containing the token
   --telegram-user              Telegram username for pairing (without @)
-  --model                      AI model ID (default: us.anthropic.claude-opus-4-6-v1)
+  --model                      AI model ID (default: us.anthropic.claude-sonnet-4-6)
   --skip-telemetron            Skip the telemetron metrics sidecar
   --help                       Show this help message
 

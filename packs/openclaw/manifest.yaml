@@ -20,7 +20,7 @@ params:
     default: us-east-1
   - name: model
     description: "Default Bedrock model ID"
-    default: "us.anthropic.claude-opus-4-6-v1"
+    default: "us.anthropic.claude-sonnet-4-6"
   - name: port
     description: "Gateway port"
     default: "3001"
@@ -38,7 +38,7 @@ params:
     default: ""
   - name: litellm-model
     description: "LiteLLM model ID (model-mode=litellm only)"
-    default: "claude-opus-4-6"
+    default: "claude-sonnet-4-6"
   - name: provider-key
     description: "Anthropic provider API key (model-mode=provider-key only)"
     default: ""

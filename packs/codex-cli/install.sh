@@ -80,7 +80,7 @@ MODEL="${PACK_ARG_MODEL}"
 
 # ── Guard against Bedrock model IDs leaking in via CFN's DefaultModel ────────────────────────────────────
 # install.sh / CFN template ship with a Bedrock-style DefaultModel
-# (e.g. us.anthropic.claude-opus-4-6-v1) that's great for openclaw/claude-code
+# (e.g. us.anthropic.claude-sonnet-4-6) that's great for openclaw/claude-code
 # but poison for codex-cli — OpenAI's API rejects it with HTTP 400.
 # If the caller hands us a Bedrock-style ID, fall back to the pack default
 # instead of writing a broken config.
