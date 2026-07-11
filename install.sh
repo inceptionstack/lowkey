@@ -3,7 +3,7 @@
 # Usage: curl -sfL https://raw.githubusercontent.com/inceptionstack/lowkey/main/install.sh -o /tmp/lowkey-install.sh && bash /tmp/lowkey-install.sh
 # Flags: --non-interactive / -y  Accept all defaults, minimal prompts
 #        --pack <name>           Pre-select agent pack (e.g. --pack claude-code, --pack openclaw)
-#        --method <m>            Pre-select deploy method: cfn, terraform (or tf)
+#        --method <m>            Pre-select deploy method: cfn
 #        --debug-in-repo         Copy local repo to /tmp instead of cloning (for local testing)
 
 # Require bash — printf -v and other bashisms won't work in dash/sh
@@ -32,21 +32,15 @@ show_debug_locations() {
   if [[ -s "${INSTALL_LOG:-}" ]]; then
     echo -e "\033[1;33m    Installer log:  ${INSTALL_LOG}\033[0m" >&2
   fi
-  if [[ -s "${_TF_LOG:-}" ]]; then
-    echo -e "\033[1;33m    Terraform log:  ${_TF_LOG}\033[0m" >&2
-  fi
   if [[ -n "${CLONE_DIR:-}" && "${CLONE_DIR}" == /tmp/* && -d "$CLONE_DIR" ]]; then
     echo -e "\033[1;33m    Clone dir:      ${CLONE_DIR}\033[0m" >&2
-  fi
-  if [[ -n "${TF_WORKDIR:-}" && -d "$TF_WORKDIR" ]]; then
-    echo -e "\033[1;33m    Terraform dir:  ${TF_WORKDIR}\033[0m" >&2
   fi
 }
 
 # Ctrl-C: kill background jobs and exit immediately
 cleanup_on_interrupt() {
   echo -e "\n\033[0;31m✗ Interrupted\033[0m" >&2
-  # Kill all child processes (terraform, gum, tee, etc.)
+  # Kill all child processes (gum, tee, etc.)
   kill -- -$$ 2>/dev/null || kill 0 2>/dev/null
   exit 130
 }
@@ -309,9 +303,10 @@ _telem_resolve_install_method() {
 }
 
 # Resolve the deploy method to a catalog-compliant slug for telemetry.
-# install.sh stores DEPLOY_METHOD as a numeric code (1=cfn-console, 2=cfn-cli,
-# 3=terraform) and PRESELECT_METHOD as the raw user input. Both need
-# normalization to the server catalog: cfn | terraform | manual | ec2-direct.
+# install.sh stores DEPLOY_METHOD as a numeric code (1=cfn-console, 2=cfn-cli)
+# and PRESELECT_METHOD as the raw user input. Both need normalization to the
+# server catalog: cfn | manual | ec2-direct (terraform is a legacy catalog
+# value the client no longer emits).
 #
 # Returns empty string when unresolved so callers can omit the prop
 # (server validator drops any value not matching the enum, which pollutes
@@ -320,13 +315,11 @@ _telem_resolve_method() {
   local m="${DEPLOY_METHOD:-}"
   case "$m" in
     1|2)    printf 'cfn\n'; return 0 ;;
-    3)      printf 'terraform\n'; return 0 ;;
   esac
   m="${PRESELECT_METHOD:-}"
   m="$(printf '%s' "$m" | tr '[:upper:]' '[:lower:]' 2>/dev/null || printf '')"
   case "$m" in
     cfn|cloudformation)  printf 'cfn\n' ;;
-    terraform|tf)        printf 'terraform\n' ;;
     manual)              printf 'manual\n' ;;
     ec2|ec2-direct)      printf 'ec2-direct\n' ;;
     *)                   printf '\n' ;;  # unresolved — caller omits key
@@ -659,7 +652,7 @@ _TELEM_LIB_READY=1
 
 # --non-interactive / --yes / -y: accept all defaults, minimal prompts
 # --pack <name>: pre-select agent pack
-# --method <m>: pre-select deploy method (cfn, terraform/tf)
+# --method <m>: pre-select deploy method (cfn)
 # --profile <p>: pre-select permission profile (builder, account_assistant, personal_assistant)
 # --simple / --advanced: pre-select install mode
 # --test: mark this invocation as a test (no AWS deploy, telemetry tagged is_test)
@@ -685,7 +678,7 @@ while [[ $# -gt 0 ]]; do
       PRESELECT_PACK="$2"; shift 2 ;;
     --method)
       if [[ $# -lt 2 || "$2" == --* ]]; then
-        echo -e "\033[0;31m✗\033[0m --method requires a value (cfn, terraform, tf)" >&2
+        echo -e "\033[0;31m✗\033[0m --method requires a value (cfn)" >&2
         exit 1
       fi
       PRESELECT_METHOD="$2"; shift 2 ;;
@@ -697,7 +690,7 @@ while [[ $# -gt 0 ]]; do
       PRESELECT_PROFILE="$2"; shift 2 ;;
     --kiro-from-secret)
       # Secrets Manager id/arn whose SecretString is the Kiro API key.
-      # Only the secret *reference* passes through CFN/TF state; the raw key
+      # Only the secret *reference* passes through CloudFormation state; the raw key
       # is resolved on the instance at install time via its IAM role.
       if [[ $# -lt 2 || "$2" == --* ]]; then
         echo -e "\033[0;31m✗\033[0m --kiro-from-secret requires a Secrets Manager id or arn" >&2
@@ -740,7 +733,7 @@ Options:
                                  kiro-cli, hermes, roundhouse)
   --profile <name>               Permission profile (builder,
                                  account_assistant, personal_assistant)
-  --method <cfn|terraform|tf>    Deploy method (default: cfn)
+  --method <cfn>                 Deploy method (default: cfn)
   --kiro-from-secret <id|arn>    Secrets Manager id/arn for Kiro API key
                                  (kiro-cli headless mode)
   --telegram-bot-token <token>  Telegram bot token (roundhouse pack;
@@ -791,7 +784,6 @@ dbg() {
 # Deploy method constants
 DEPLOY_CFN_CONSOLE=1
 DEPLOY_CFN_CLI=2
-DEPLOY_TERRAFORM=3
 # Stamped at release; fall back to git info at runtime
 INSTALLER_COMMIT="${INSTALLER_COMMIT:-$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo dev)}"
 INSTALLER_DATE="${INSTALLER_DATE:-$(d=$(git -C "$SCRIPT_DIR" log -1 --format='%ci' 2>/dev/null | cut -d' ' -f1,2); echo "${d:-unknown}")}"
@@ -818,9 +810,7 @@ GUM=""  # set by install_gum — required, script fails without it
 GUM_VERSION="0.14.5"  # fallback version
 
 # ── Shared platform detection ────────────────────────────────────────────────
-# Sets DETECTED_OS and DETECTED_ARCH. Accepts optional arch style:
-#   "go"  → amd64/arm64  (Terraform, Go binaries)
-#   default → x86_64/arm64 (gum, generic)
+# Sets DETECTED_OS and DETECTED_ARCH (x86_64/arm64 — gum, generic).
 DETECTED_OS=""
 DETECTED_ARCH=""
 
@@ -834,15 +824,13 @@ hw_arch() {
 }
 
 detect_platform() {
-  local arch_style="${1:-default}"
   case "$(uname -s)" in
     Darwin) DETECTED_OS="Darwin" ;;
     Linux)  DETECTED_OS="Linux"  ;;
     *)      DETECTED_OS=""; return 1 ;;
   esac
   case "$(hw_arch)" in
-    x86_64|amd64)
-      if [[ "$arch_style" == "go" ]]; then DETECTED_ARCH="amd64"; else DETECTED_ARCH="x86_64"; fi ;;
+    x86_64|amd64)  DETECTED_ARCH="x86_64" ;;
     aarch64|arm64) DETECTED_ARCH="arm64" ;;
     *)             DETECTED_ARCH=""; return 1 ;;
   esac
@@ -1606,35 +1594,7 @@ check_existing_deployments() {
   fi
 }
 
-# ============================================================================
-# Phase: Collect configuration
-# ============================================================================
-# Helper: get a human-readable terraform version string
-terraform_version_string() {
-  terraform version -json 2>/dev/null \
-    | json_field terraform_version 2>/dev/null \
-    || terraform version | head -1
-}
 
-# Returns 0 if terraform is installed, >= 1.10, and native architecture
-terraform_ok() {
-  command -v terraform &>/dev/null || return 1
-  # Check version >= 1.10
-  local ver major minor
-  ver=$(terraform version -json 2>/dev/null | json_field terraform_version 2>/dev/null || echo "0.0.0")
-  major=$(echo "$ver" | cut -d. -f1)
-  minor=$(echo "$ver" | cut -d. -f2)
-  dbg "terraform_ok: ver=$ver major=$major minor=$minor path=$(command -v terraform)"
-  { [[ "$major" -gt 1 ]] || { [[ "$major" -eq 1 ]] && [[ "$minor" -ge 10 ]]; }; } || return 1
-  # Check architecture matches
-  local host_arch; host_arch=$(hw_arch)
-  local tf_arch; tf_arch=$(file "$(command -v terraform)" 2>/dev/null || echo "")
-  dbg "terraform_ok: host=$host_arch tf_arch=$tf_arch"
-  case "$host_arch" in
-    arm64|aarch64) [[ "$tf_arch" == *"arm64"* ]] || return 1 ;;
-    x86_64|amd64)  [[ "$tf_arch" == *"x86_64"* || "$tf_arch" == *"x86-64"* ]] || return 1 ;;
-  esac
-}
 
 choose_deploy_method() {
   step "Deploy method"
@@ -1642,41 +1602,31 @@ choose_deploy_method() {
   if [[ -n "${PRESELECT_METHOD}" ]]; then
     case "${PRESELECT_METHOD}" in
       cfn|cloudformation)   DEPLOY_METHOD="$DEPLOY_CFN_CLI" ;;
-      terraform|tf)         DEPLOY_METHOD="$DEPLOY_TERRAFORM" ;;
       *)
         echo ""
         echo -e "  ${RED}✗ Unknown deploy method: '${PRESELECT_METHOD}'${NC}"
         echo ""
         echo "  Valid methods:"
         echo "    cfn          — CloudFormation CLI"
-        echo "    terraform    — Terraform (or 'tf')"
         echo ""
-        fail "Use --method <cfn|terraform> with one of the methods listed above."
+        fail "Use --method cfn (CloudFormation is the only supported deploy method)."
         ;;
     esac
     local method_name
     case "$DEPLOY_METHOD" in
       "$DEPLOY_CFN_CLI")     method_name="CloudFormation CLI" ;;
-      "$DEPLOY_TERRAFORM")   method_name="Terraform" ;;
     esac
     ok "Deploy method pre-selected: ${method_name}"
   else
   local method_choice
   _gum_or_die method_choice $GUM choose --header "Deployment method" --selected "CloudFormation CLI" \
     "CloudFormation CLI" \
-    "CloudFormation Console" \
-    "Terraform"
+    "CloudFormation Console"
   case "$method_choice" in
     "CloudFormation CLI")     DEPLOY_METHOD="$DEPLOY_CFN_CLI" ;;
     "CloudFormation Console") DEPLOY_METHOD="$DEPLOY_CFN_CONSOLE" ;;
-    "Terraform")              DEPLOY_METHOD="$DEPLOY_TERRAFORM" ;;
     *)                        DEPLOY_METHOD="$DEPLOY_CFN_CLI" ;;
   esac
-  fi
-
-  # If Terraform selected and not installed, handle it now — before config questions.
-  if [[ "$DEPLOY_METHOD" == "$DEPLOY_TERRAFORM" ]]; then
-    ensure_terraform_available
   fi
 }
 
@@ -2017,11 +1967,10 @@ collect_security_config() {
 }
 
 # ============================================================================
-# Parameter source-of-truth: single mapping for CFN Console, CFN CLI, Terraform
+# Parameter source-of-truth: single mapping for CFN Console and CFN CLI
 # ============================================================================
-# ⚠ KEEP THESE THREE ARRAYS IN SYNC — same order, same count
+# ⚠ KEEP THESE TWO ARRAYS IN SYNC — same order, same count
 PARAM_CFN_NAMES=(EnvironmentName PackName ProfileName InstanceType DefaultModel ModelMode BedrockRegion LokiWatermark EnableBedrockForm EnableSecurityHub EnableGuardDuty EnableInspector EnableAccessAnalyzer EnableConfigRecorder ExistingVpcId ExistingSubnetId RepoBranch KiroFromSecret TelegramBotTokenSecret TelegramUser)
-PARAM_TF_NAMES=(environment_name pack_name profile_name instance_type default_model model_mode bedrock_region loki_watermark enable_bedrock_form enable_security_hub enable_guardduty enable_inspector enable_access_analyzer enable_config_recorder existing_vpc_id existing_subnet_id repo_branch kiro_from_secret telegram_bot_token_secret telegram_user)
 PARAM_VALUES=()  # populated by build_deploy_params()
 
 # Per-pack default model (passed to CFN DefaultModel / bootstrap.sh --model).
@@ -2079,8 +2028,6 @@ build_deploy_params() {
   # Validate parallel arrays are in sync
   [[ ${#PARAM_CFN_NAMES[@]} -eq ${#PARAM_VALUES[@]} ]] \
     || fail "BUG: PARAM_CFN_NAMES has ${#PARAM_CFN_NAMES[@]} entries but PARAM_VALUES has ${#PARAM_VALUES[@]}"
-  [[ ${#PARAM_TF_NAMES[@]} -eq ${#PARAM_VALUES[@]} ]] \
-    || fail "BUG: PARAM_TF_NAMES has ${#PARAM_TF_NAMES[@]} entries but PARAM_VALUES has ${#PARAM_VALUES[@]}"
 }
 
 # Format params as CFN Console URL query string (param_Key=Value), URL-encoded
@@ -2104,16 +2051,6 @@ format_cfn_cli_params() {
   echo "$params"
 }
 
-# Format params as Terraform -var arguments
-format_tf_vars() {
-  local vars=()
-  for i in "${!PARAM_TF_NAMES[@]}"; do
-    vars+=(-var="${PARAM_TF_NAMES[$i]}=${PARAM_VALUES[$i]}")
-  done
-  # aws_region controls the provider region — must match DEPLOY_REGION
-  vars+=(-var="aws_region=${DEPLOY_REGION}")
-  printf '%s\n' "${vars[@]}"
-}
 
 show_summary() {
   step "Review & confirm"
@@ -2135,11 +2072,8 @@ show_summary() {
     security_summary="${enabled_list:-none}"
   fi
 
-  local deploy_method_label="Terraform"
-  case "$DEPLOY_METHOD" in
-    "$DEPLOY_CFN_CLI")     deploy_method_label="CloudFormation CLI" ;;
-    "$DEPLOY_CFN_CONSOLE") deploy_method_label="CloudFormation Console" ;;
-  esac
+  local deploy_method_label="CloudFormation CLI"
+  [[ "$DEPLOY_METHOD" == "$DEPLOY_CFN_CONSOLE" ]] && deploy_method_label="CloudFormation Console"
 
   local summary=""
   summary+="Branch        ${REPO_BRANCH}\n"
@@ -2210,7 +2144,6 @@ prepare_repo() {
         warn "Local repo diverged from remote — resetting to origin/$branch"
         git -C "$CLONE_DIR" reset --hard "origin/$branch" 2>&1 | tail -1
       fi
-      clean_stale_terraform "$CLONE_DIR"
     else
       rm -rf "$CLONE_DIR" 2>/dev/null || true
       run_or_fail "Cloning repository" git clone --depth 1 "$REPO_URL" "$CLONE_DIR"
@@ -2221,19 +2154,6 @@ prepare_repo() {
   fi
 }
 
-clean_stale_terraform() {
-  local dir="$1"
-  local tf_dir="$dir/deploy/terraform/.terraform"
-  [[ -d "$tf_dir" ]] || return 0
-
-  warn "Found .terraform/ from a previous deploy in ${dir}"
-  if confirm "  Clean it so Terraform starts fresh?" "default_yes"; then
-    rm -rf "$tf_dir" "$dir/deploy/terraform/backend.tf" "$dir/deploy/terraform/.terraform.lock.hcl"
-    ok "Cleaned stale Terraform state"
-  else
-    fail "Cannot proceed with stale .terraform/. Re-run and choose a different clone location or clean it manually."
-  fi
-}
 
 # ============================================================================
 # Deploy: CloudFormation Console (option 1)
@@ -2392,251 +2312,11 @@ wait_for_cfn_stack() {
   done
 }
 
-# State tracking for Terraform backend (used by deploy_terraform to tag VPC)
-TF_STATE_BUCKET=""
-TF_STATE_KEY=""
-TF_WORKDIR=""  # Set if Terraform work is moved to /tmp (CloudShell low-disk)
 PACK_NAME="openclaw"  # Default pack; overridden by collect_config
 
 # VPC reuse: set by check_existing_deployments(); empty = create new VPC
 EXISTING_VPC_ID=""
 EXISTING_SUBNET_ID=""
-
-# ============================================================================
-# Deploy: Terraform (option 4)
-# Auto-install Terraform if not present (works on CloudShell, AL2023, Ubuntu, macOS)
-install_terraform() {
-  info "Installing Terraform..."
-
-  detect_platform "go" || fail "Unsupported OS/architecture: $(uname -s)/$(uname -m)"
-  local os arch
-  os=$(echo "$DETECTED_OS" | tr '[:upper:]' '[:lower:]')
-  arch="$DETECTED_ARCH"
-
-  # Get latest stable version from HashiCorp checkpoint
-  local version
-  version=$(curl -sf https://checkpoint-api.hashicorp.com/v1/check/terraform 2>/dev/null \
-    | json_field current_version 2>/dev/null \
-    || echo "1.12.1")  # Fallback to known good version
-
-  local zip_url="https://releases.hashicorp.com/terraform/${version}/terraform_${version}_${os}_${arch}.zip"
-  local install_dir="${HOME}/.local/bin"
-  [[ "$IS_CLOUDSHELL" == "true" ]] && install_dir="/tmp/terraform-bin"
-  local tmp_zip="/tmp/terraform_${version}.zip"
-
-  info "Downloading Terraform ${version} (${os}/${arch})..."
-  curl -sfL "$zip_url" -o "$tmp_zip" || fail "Failed to download Terraform from ${zip_url}"
-
-  # Unzip — use busybox or jar as fallback if unzip not available (CloudShell may not have it)
-  mkdir -p "$install_dir"
-  if command -v unzip &>/dev/null; then
-    unzip -o -q "$tmp_zip" -d "$install_dir"
-  elif command -v busybox &>/dev/null; then
-    busybox unzip -o -q "$tmp_zip" -d "$install_dir"
-  elif command -v jar &>/dev/null; then
-    (cd "$install_dir" && jar xf "$tmp_zip")
-  else
-    fail "Cannot extract terraform zip — install 'unzip': sudo yum install -y unzip (or sudo apt install unzip)"
-  fi
-
-  chmod +x "${install_dir}/terraform"
-  rm -f "$tmp_zip"
-
-  # Add to PATH for this session
-  export PATH="${install_dir}:${PATH}"
-
-  if command -v terraform &>/dev/null; then
-    ok "Terraform ${version} installed to ${install_dir}/terraform"
-    ok "$(terraform version | head -1)"
-  else
-    fail "Terraform installed but not found in PATH. Try: export PATH=${install_dir}:\$PATH"
-  fi
-}
-
-# Check terraform is available, correct arch, correct version — offer to install if not
-ensure_terraform_available() {
-  if terraform_ok; then
-    ok "Terraform: $(terraform_version_string)"
-    return 0
-  fi
-  if command -v terraform &>/dev/null; then
-    local tf_bin; tf_bin=$(file "$(command -v terraform)" 2>/dev/null || echo "")
-    local host; host=$(hw_arch)
-    if [[ ("$host" == "arm64" && "$tf_bin" != *"arm64"*) || ("$host" == "x86_64" && "$tf_bin" != *"x86_64"* && "$tf_bin" != *"x86-64"*) ]]; then
-      warn "Terraform $(terraform_version_string) is wrong architecture (need native ${host})."
-    else
-      warn "Terraform $(terraform_version_string) is too old (need >= 1.10)."
-    fi
-  else
-    warn "Terraform is not installed on this system."
-  fi
-  echo ""
-  echo "  Lowkey can install Terraform locally now (no root/sudo required)."
-  echo "  This works in AWS CloudShell, EC2, macOS, and most Linux environments."
-  echo ""
-  if confirm "Install Terraform locally?" "default_yes"; then
-    install_terraform
-  else
-    fail "Terraform >= 1.10 is required."
-  fi
-}
-# ============================================================================
-deploy_terraform() {
-  dbg "deploy_terraform: pwd=$(pwd)"
-  ensure_terraform_available
-  cd deploy/terraform
-  dbg "deploy_terraform: cd done, pwd=$(pwd), .git exists=$(test -d ../../.git && echo yes || echo no)"
-  setup_terraform_backend
-  terraform_init
-  terraform_validate
-  terraform_apply
-  INSTANCE_ID=$(terraform output -raw instance_id 2>&1) \
-    || fail "Could not read instance_id from Terraform output. Is the EC2 instance defined?"
-  PUBLIC_IP=$(terraform output -raw public_ip 2>&1) \
-    || fail "Could not read public_ip from Terraform output."
-
-  # Tag VPC with state backend info so uninstall can find it
-  local vpc_id
-  vpc_id=$(terraform output -raw vpc_id 2>/dev/null || echo "")
-  if [[ -n "$vpc_id" && -n "$TF_STATE_BUCKET" ]]; then
-    aws ec2 create-tags --resources "$vpc_id" --region "$DEPLOY_REGION" --tags \
-      "Key=loki:tf-state-bucket,Value=${TF_STATE_BUCKET}" \
-      "Key=loki:tf-state-key,Value=${TF_STATE_KEY}" 2>/dev/null || true
-    ok "Tagged VPC with Terraform state location"
-  fi
-
-  ok "Terraform apply complete!"
-}
-
-setup_terraform_backend() {
-  local bucket="${ENV_NAME}-tfstate-${ACCOUNT_ID}"
-  local state_key="loki-agent/terraform.tfstate"
-
-  # Store for VPC tagging later
-  TF_STATE_BUCKET="$bucket"
-  TF_STATE_KEY="$state_key"
-
-  create_s3_bucket "$bucket" "$DEPLOY_REGION"
-
-  cat > backend.tf <<EOF
-terraform {
-  backend "s3" {
-    bucket         = "${bucket}"
-    key            = "${state_key}"
-    region         = "${DEPLOY_REGION}"
-    use_lockfile   = true
-    encrypt        = true
-  }
-}
-EOF
-}
-
-terraform_init() {
-  # Persistent plugin cache avoids re-downloading providers on every install.
-  # CloudShell: /home is ~1GB so use /tmp. Elsewhere: use ~/.terraform.d/plugin-cache.
-  if [[ -z "${TF_PLUGIN_CACHE_DIR:-}" ]]; then
-    if [[ "$IS_CLOUDSHELL" == "true" ]]; then
-      export TF_PLUGIN_CACHE_DIR="/tmp/terraform-plugin-cache"
-    else
-      export TF_PLUGIN_CACHE_DIR="${HOME}/.terraform.d/plugin-cache"
-    fi
-  fi
-  mkdir -p "$TF_PLUGIN_CACHE_DIR"
-
-  # Check disk space before downloading providers
-  local avail_mb
-  avail_mb=$(df -Pm "$(pwd)" 2>/dev/null | awk 'NR==2{print $4}' || echo "9999")
-  if [[ "$avail_mb" -lt 600 ]]; then
-    warn "Low disk space (${avail_mb}MB available) — Terraform providers need ~500MB"
-    if [[ "$IS_CLOUDSHELL" == "true" ]]; then
-      info "CloudShell detected — moving Terraform workdir to /tmp"
-      TF_WORKDIR="/tmp/lowkey-terraform-$$"
-      mkdir -p "$TF_WORKDIR"
-      cp -a . "$TF_WORKDIR/"
-      cd "$TF_WORKDIR"
-      info "Working from: $(pwd)"
-    else
-      warn "You may run out of disk space. Consider freeing space or using /tmp."
-    fi
-  fi
-
-  info "Initializing Terraform (downloading providers)..."
-  dbg "run_or_fail: Terraform init -> terraform init -input=false"
-  local _init_log="/tmp/lowkey-tf-init-$$.log"
-  : > "$_init_log"
-  terraform init -input=false > "$_init_log" 2>&1 &
-  local tf_pid=$!
-  # Stream log in foreground (interruptible by Ctrl-C)
-  tail -f "$_init_log" 2>/dev/null | while IFS= read -r line; do
-    if   [[ "$line" == *"Installing"* ]];  then echo -e "  ${BLUE}▸${NC} ${line#"- "}"
-    elif [[ "$line" == *"Installed"* ]];   then echo -e "  ${GREEN}✓${NC} ${line#"- "}"
-    elif [[ "$line" == *"Initializing"* ]]; then echo -e "  ${DIM}${line}${NC}"
-    elif [[ "$line" == *"Error"* || "$line" == *"error"* ]]; then echo -e "  ${RED}${line}${NC}"
-    fi
-    # Stop tailing once terraform exits
-    kill -0 $tf_pid 2>/dev/null || break
-  done &
-  local tail_pid=$!
-  local rc=0
-  wait $tf_pid || rc=$?
-  kill $tail_pid 2>/dev/null; wait $tail_pid 2>/dev/null || true
-  { echo "=== Terraform init (rc=$rc) ==="; cat "$_init_log"; echo ""; } >> "$INSTALL_LOG" 2>/dev/null
-  if [[ $rc -ne 0 ]]; then
-    warn "Terraform init failed:"
-    tail -20 "$_init_log" | $GUM format -t code
-    rm -f "$_init_log"
-    fail "Terraform init exited with code $rc"
-  fi
-  rm -f "$_init_log"
-  ok "Terraform initialized"
-
-}
-
-terraform_validate() {
-  info "Validating Terraform config..."
-  dbg "terraform_validate: running"
-  run_or_fail "Validating Terraform config" terraform validate
-  rm -f "$_RUN_LOG"
-  ok "Terraform config valid"
-}
-
-terraform_apply() {
-  dbg "terraform_apply: starting"
-  info "Deploying (~2-3 minutes)..."
-  # Build -var arguments from the single parameter source-of-truth
-  local tf_vars=()
-  while IFS= read -r v; do
-    tf_vars+=("$v")
-  done < <(format_tf_vars)
-  # Stream terraform apply live — run in background so Ctrl-C works
-  _TF_LOG="/tmp/lowkey-terraform-apply.log"
-  : > "$_TF_LOG"
-  terraform apply -auto-approve "${tf_vars[@]}" > "$_TF_LOG" 2>&1 &
-  local tf_pid=$!
-  # Stream log in background, filter for interesting lines
-  tail -f "$_TF_LOG" 2>/dev/null | while IFS= read -r line; do
-    if   [[ "$line" == *": Creating..."* ]];       then echo -e "  ${BLUE}+${NC} ${line##*] }"
-    elif [[ "$line" == *": Creation complete"* ]];  then echo -e "  ${GREEN}✓${NC} ${line##*] }"
-    elif [[ "$line" == *"Apply complete"* ]];       then echo -e "\n  ${GREEN}${line}${NC}"
-    elif [[ "$line" == *"Outputs:"* ]] || [[ "$line" == *" = "* ]]; then echo "  $line"
-    elif [[ "$line" == *"Error"* || "$line" == *"error"* ]]; then echo -e "  ${RED}${line}${NC}"
-    fi
-    kill -0 $tf_pid 2>/dev/null || break
-  done &
-  local tail_pid=$!
-  local rc=0
-  wait $tf_pid || rc=$?
-  kill $tail_pid 2>/dev/null; wait $tail_pid 2>/dev/null || true
-  { echo "=== Terraform apply (rc=$rc) ==="; cat "$_TF_LOG"; echo ""; } >> "$INSTALL_LOG" 2>/dev/null
-  if [[ $rc -ne 0 ]]; then
-    echo ""
-    warn "Terraform apply failed (exit code $rc)"
-    local err_text
-    err_text=$(tail -40 "$_TF_LOG")
-    echo "$err_text" | $GUM format -t code
-    fail "See error output above"
-  fi
-}
 
 # ============================================================================
 # Ensure Lowkey-Session SSM document exists (instance-scoped, not account-wide)
@@ -2851,7 +2531,6 @@ show_complete() {
   echo ""
 
   safe_cleanup_dir "${CLONE_DIR:-}" "cloned repo directory" '/tmp/*' "$HOME/.*" '*/lowkey'
-  safe_cleanup_dir "${TF_WORKDIR:-}" "temp Terraform workdir" '/tmp/*'
 }
 
 # ============================================================================
@@ -3258,8 +2937,6 @@ main() {
   case "$DEPLOY_METHOD" in
     "$DEPLOY_CFN_CLI") info "Deploying with CloudFormation..."
        deploy_cfn_stack "deploy/cloudformation/template.yaml" "CAPABILITY_NAMED_IAM" ;;
-    "$DEPLOY_TERRAFORM") info "Deploying with Terraform..."
-       deploy_terraform ;;
     *) fail "Invalid choice: $DEPLOY_METHOD" ;;
   esac
   _telem_deploy_completed 2>/dev/null || true

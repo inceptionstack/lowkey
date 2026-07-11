@@ -176,7 +176,7 @@ Backends MUST reject events whose `name` is not on this allowlist. This prevents
 |---|---|---|
 | `install.started` | `{method}` | User launched installer. |
 | `install.pack_selected` | `{pack, profile}` | User picked an agent pack. |
-| `install.method_selected` | `{method, region}` | User picked deploy method (cfn/terraform/console) + region. |
+| `install.method_selected` | `{method, region}` | User picked deploy method (cfn; `terraform` is a legacy catalog value) + region. |
 | `install.deploy_started` | `{method, region, pack}` | CFN/TF apply kicked off. |
 | `install.deploy_completed` | `{duration_ms, method}` | Stack reached `CREATE_COMPLETE` or equivalent. |
 | `install.bootstrap_completed` | `{account_prefix}` | EC2 instance finished userdata bootstrap. |

@@ -325,13 +325,6 @@ else
   fail "CFN template missing KiroFromSecret parameter"
 fi
 
-# Terraform: kiro_from_secret variable
-if grep -q 'kiro_from_secret' "${REPO_DIR}/deploy/terraform/variables.tf"; then
-  pass "Terraform declares kiro_from_secret variable"
-else
-  fail "Terraform missing kiro_from_secret variable"
-fi
-
 # ── Registry consistency ──────────────────────────────────────────────────────
 header "registry consistency"
 

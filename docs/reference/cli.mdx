@@ -14,7 +14,7 @@ This page lists every flag accepted by `install.sh` (the script you get from `in
 | `--advanced` | Force advanced install mode (prompt for every parameter). |
 | `--pack <name>` | Pre-select agent pack. Valid: `openclaw`, `claude-code`, `codex-cli`, `kiro-cli`, `nemoclaw`, `hermes`, `pi`, `ironclaw`. |
 | `--profile <name>` | Pre-select profile. Valid: `builder`, `account_assistant`, `personal_assistant`. |
-| `--method <cfn\|terraform\|tf>` | Pre-select deploy method. Default: CFN via CLI. |
+| `--method <cfn>` | Pre-select deploy method. Default: CFN via CLI. |
 | `--kiro-from-secret <id-or-arn>` | Secrets Manager id/arn whose `SecretString` is the Kiro API key (kiro-cli pack, headless mode). |
 | `--debug-in-repo` | Dev-only: run the installer from the current working directory instead of downloading. |
 | `--test`, `--dry-run` | Run installer end-to-end without provisioning AWS resources. Telemetry tagged `is_test`. |
@@ -57,16 +57,6 @@ This page lists every flag accepted by `install.sh` (the script you get from `in
     ```
   </Tab>
 </Tabs>
-
-## Terraform instead of CloudFormation
-
-```bash
-curl -sfL install.lowkey.run | bash -s -- -y \
-  --pack openclaw --profile builder \
-  --method terraform
-```
-
-The installer runs Terraform for you under `deploy/terraform/` — `init` → `validate` → `apply -auto-approve`. If you want a review-first flow, use Terraform directly (see [Deploy with Terraform](/reference/terraform)).
 
 ## Advanced mode flags
 

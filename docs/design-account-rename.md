@@ -86,7 +86,7 @@ deploy()                      → including console-deploy early-exit path
 
 Note: `maybe_rename_account()` must be placed **before** the console-deploy
 early-exit (`DEPLOY_CFN_CONSOLE` path calls `exit 0` right after deploy).
-All deploy paths — CFN console, CFN CLI, Terraform — get the rename.
+All deploy paths — CFN console, CFN CLI — get the rename.
 
 ## maybe_rename_account() Logic
 

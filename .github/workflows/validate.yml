@@ -4,14 +4,12 @@ on:
   push:
     branches: [main, 'feature/**']
     paths:
-      - 'deploy/terraform/**'
       - 'deploy/cloudformation/**'
       - 'install.sh'
       - 'uninstall.sh'
       - '.github/workflows/validate.yml'
   pull_request:
     paths:
-      - 'deploy/terraform/**'
       - 'deploy/cloudformation/**'
       - 'install.sh'
       - 'uninstall.sh'
@@ -35,13 +33,3 @@ jobs:
         run: |
           shellcheck --severity=error install.sh uninstall.sh || true
 
-      - uses: hashicorp/setup-terraform@v3
-
-      - name: Terraform fmt check
-        run: terraform fmt -check -diff deploy/terraform/
-
-      - name: Terraform validate
-        run: |
-          cd deploy/terraform
-          terraform init -backend=false -input=false
-          terraform validate

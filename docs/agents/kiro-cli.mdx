@@ -67,7 +67,7 @@ description: "AWS's agentic IDE terminal client, with MCP servers and optional h
 | `from-secret` | `--kiro-from-secret` | — | Secrets Manager id/arn whose `SecretString` is the Kiro API key |
 
 <Note>
-The top-level installer only supports `--kiro-from-secret` for headless auth. The pack-level script (`packs/kiro-cli/install.sh`) still accepts a legacy `--kiro-api-key` flag with a deprecation warning, but this is **not** threaded through the top-level installer, CFN, or Terraform. Always use `--kiro-from-secret`.
+The top-level installer only supports `--kiro-from-secret` for headless auth. The pack-level script (`packs/kiro-cli/install.sh`) still accepts a legacy `--kiro-api-key` flag with a deprecation warning, but this is **not** threaded through the top-level installer or CFN. Always use `--kiro-from-secret`.
 </Note>
 
 ## Resource requirements
@@ -110,7 +110,7 @@ install.sh CLI → CFN KiroFromSecret param → UserData env → bootstrap.sh �
                                                                         get-secret-value
 ```
 
-**The raw Kiro API key never appears in CFN state, Terraform state, UserData logs, or shell history.** Only the secret reference flows through deploy; IAM gates who can resolve it.
+**The raw Kiro API key never appears in CloudFormation state, UserData logs, or shell history.** Only the secret reference flows through deploy; IAM gates who can resolve it.
 
 ## MCP servers
 

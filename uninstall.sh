@@ -360,9 +360,19 @@ try_terraform_destroy() {
   info "Using terraform destroy (state: s3://${_TF_BUCKET}/${_TF_KEY})"
 
   local tf_dir; tf_dir="$(mktemp -d)/lowkey"
-  info "Cloning lowkey for Terraform config..."
-  git clone --depth 1 "$REPO_URL" "$tf_dir" 2>&1 | tail -1
-  cd "$tf_dir/deploy/terraform"
+  # deploy/terraform/ was removed from main (CloudFormation is the only deploy
+  # method now). Clone the pinned legacy tag that still contains the Terraform
+  # config so teardown of old Terraform-based deployments keeps working.
+  local tf_ref="legacy-terraform"
+  info "Cloning lowkey (ref: ${tf_ref}) for Terraform config..."
+  if ! git clone --depth 1 --branch "$tf_ref" "$REPO_URL" "$tf_dir" 2>&1 | tail -1; then
+    warn "Could not clone legacy Terraform ref '${tf_ref}'"
+    rm -rf "$tf_dir"; return 1
+  fi
+  if ! cd "$tf_dir/deploy/terraform" 2>/dev/null; then
+    warn "Legacy ref '${tf_ref}' has no deploy/terraform directory"
+    rm -rf "$tf_dir"; return 1
+  fi
 
   cat > backend.tf <<EOF
 terraform {

@@ -44,7 +44,6 @@ Profiles also drive defaults: instance size, which security services turn on, wh
 Lowkey ships both IaC flavors and keeps them in sync:
 
 - **CloudFormation** (default) — `aws cloudformation create-stack`
-- **Terraform** — `terraform apply` using the repo's module
 
 Both call the same `deploy/bootstrap.sh` from UserData, so the agent you get is identical either way. Pick based on what the rest of your stack uses.
 

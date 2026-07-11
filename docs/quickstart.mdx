@@ -35,7 +35,7 @@ You'll be prompted for:
 1. **Install mode** — Simple (recommended) or Advanced
 2. **Agent pack** — openclaw, claude-code, codex-cli, kiro-cli, nemoclaw, hermes, pi, ironclaw
 3. **Profile** — builder, account_assistant, or personal_assistant
-4. **Deploy method** — CloudFormation or Terraform
+4. **Deploy method** — CloudFormation (CLI or Console)
 
 Simple mode auto-configures everything else from the pack + profile choice. See [Simple-mode defaults](/reference/simple-mode-defaults) for what's decided for you.
 
@@ -84,11 +84,11 @@ Pass `-y` (or `--non-interactive`) plus the pack and profile to skip prompts ent
 ## What happens next
 
 <AccordionGroup>
-  <Accordion title="CloudFormation / Terraform creates the base infrastructure">
+  <Accordion title="CloudFormation creates the base infrastructure">
     New VPC (`10.0.0.0/16` by default), public subnet, security group, IAM instance profile, and an EC2 instance (`t4g.xlarge` for builder, `t4g.medium` for assistant profiles).
   </Accordion>
   <Accordion title="UserData bootstrap runs on the instance">
-    Installs Node.js via mise, clones the lowkey repo, dispatches to the pack's `install.sh`, and signals CFN / Terraform when done.
+    Installs Node.js via mise, clones the lowkey repo, dispatches to the pack's `install.sh`, and signals CloudFormation when done.
   </Accordion>
   <Accordion title="Pack installs the agent">
     Each pack has its own logic — systemd service, CLI binary, or both. See the per-agent pages under [Agents](/agents/overview) for specifics.
@@ -113,9 +113,6 @@ Once the stack is `CREATE_COMPLETE`, SSM in and run the agent's command — e.g.
 ```bash
 # CloudFormation
 aws cloudformation delete-stack --stack-name <your-stack>
-
-# Terraform
-terraform destroy
 ```
 
 This removes everything the installer created: VPC, EC2, IAM, security-service subscriptions. Any Bedrock model invocations are billed through your account and stop when the instance terminates.

@@ -6,10 +6,6 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CFN_TEMPLATE="$REPO_ROOT/deploy/cloudformation/template.yaml"
-TF_VARS="$REPO_ROOT/deploy/terraform/variables.tf"
-TF_MAIN="$REPO_ROOT/deploy/terraform/main.tf"
-TF_OUTPUTS="$REPO_ROOT/deploy/terraform/outputs.tf"
-TF_USERDATA="$REPO_ROOT/deploy/terraform/userdata.sh.tpl"
 INSTALL_SH="$REPO_ROOT/install.sh"
 
 PASS=0
@@ -52,39 +48,6 @@ check_contains "$CFN_TEMPLATE" "Deployed agent pack" "CFN: PackName in Outputs"
 
 echo ""
 
-# ── Terraform variables.tf ──────────────────────────────────────────────────
-echo -e "${BOLD}Terraform (deploy/terraform/variables.tf)${NC}"
-check_contains "$TF_VARS" 'variable "pack_name"' "TF: pack_name variable defined"
-check_contains "$TF_VARS" '"openclaw"' "TF: pack_name default is openclaw"
-check_contains "$TF_VARS" '"hermes"' "TF: pack_name validation includes hermes"
-check_contains "$TF_VARS" 'validation' "TF: pack_name has validation block"
-check_contains "$TF_VARS" 'contains' "TF: pack_name validation uses contains()"
-
-echo ""
-
-# ── Terraform main.tf ────────────────────────────────────────────────────────
-echo -e "${BOLD}Terraform (deploy/terraform/main.tf)${NC}"
-check_contains "$TF_MAIN" "pack_name                 = var.pack_name" "TF main: pack_name passed to userdata template"
-check_contains "$TF_MAIN" '"loki:pack"' "TF main: loki:pack in loki_tags"
-
-echo ""
-
-# ── Terraform userdata.sh.tpl ────────────────────────────────────────────────
-echo -e "${BOLD}Terraform (deploy/terraform/userdata.sh.tpl)${NC}"
-check_contains "$TF_USERDATA" 'PACK_NAME' "TF userdata: PACK_NAME variable set"
-check_contains "$TF_USERDATA" 'git clone --depth 1' "TF userdata: uses git clone"
-check_contains "$TF_USERDATA" 'deploy/bootstrap.sh' "TF userdata: calls bootstrap.sh"
-check_contains "$TF_USERDATA" '--pack' "TF userdata: passes --pack flag"
-
-echo ""
-
-# ── Terraform outputs.tf ────────────────────────────────────────────────────
-echo -e "${BOLD}Terraform (deploy/terraform/outputs.tf)${NC}"
-check_contains "$TF_OUTPUTS" '"pack_name"' "TF outputs: pack_name output defined"
-check_contains "$TF_OUTPUTS" 'var.pack_name' "TF outputs: pack_name references var"
-
-echo ""
-
 # ── install.sh ───────────────────────────────────────────────────────────────
 echo -e "${BOLD}install.sh${NC}"
 check_contains "$INSTALL_SH" 'Agent to deploy' "install.sh: pack selection menu header"
@@ -92,16 +55,12 @@ check_contains "$INSTALL_SH" 'OpenClaw' "install.sh: OpenClaw option in menu"
 check_contains "$INSTALL_SH" 'Hermes' "install.sh: Hermes option in menu"
 check_contains "$INSTALL_SH" 'PACK_NAME=' "install.sh: PACK_NAME variable set"
 check_contains "$INSTALL_SH" 'PackName' "install.sh: PackName in PARAM_CFN_NAMES"
-check_contains "$INSTALL_SH" 'pack_name' "install.sh: pack_name in PARAM_TF_NAMES"
 check_contains "$INSTALL_SH" 't4g.medium' "install.sh: hermes default size logic present"
 
 # ── Branch detection & SSM doc version ──────────────────────────────────────
 echo -e "${BOLD}Branch & SSM fixes${NC}"
 check_contains "$INSTALL_SH" '[[ "$REPO_BRANCH" == "HEAD" ]]' "install.sh: detached HEAD falls back to main"
 check_contains "$INSTALL_SH" 'REPO_BRANCH=' "install.sh: REPO_BRANCH is set"
-check_contains "$TF_VARS" 'variable "repo_branch"' "TF: repo_branch variable defined"
-check_contains "$TF_MAIN" "repo_branch" "TF main: repo_branch passed to userdata template"
-check_contains "$TF_USERDATA" 'repo_branch' "TF userdata: uses repo_branch for git clone"
 check_contains "$CFN_TEMPLATE" "RepoBranch" "CFN: RepoBranch parameter defined"
 check_contains "$INSTALL_SH" "DocumentDescription.DocumentVersion" "install.sh: SSM update-document captures numeric version"
 check_contains "$INSTALL_SH" 'new_version' "install.sh: SSM update-document-default-version uses captured version"

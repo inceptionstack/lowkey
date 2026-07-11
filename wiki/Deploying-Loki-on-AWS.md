@@ -68,7 +68,7 @@ openclaw tui
 - **AWS account** with admin access (IAM user or SSO with AdministratorAccess)
 - **AWS CLI** installed and configured (`aws configure`)
 - **Bedrock model access** — the template auto-submits the use case form, but model activation can take ~15 minutes after first deployment
-- One of: **AWS CLI** (for CloudFormation), **SAM CLI**, or **Terraform**
+- **AWS CLI**
 
 ### Recommended: AWS Organizations Sandbox
 
@@ -123,7 +123,6 @@ All three methods deploy **identical infrastructure**. Choose based on your tool
 |--------|----------|------|
 | **CloudFormation** | AWS Console users, StackSets, Organizations | [deploy/cloudformation/](../deploy/cloudformation/) |
 | **SAM** | Serverless teams, `sam deploy --guided` | [deploy/sam/](../deploy/sam/) |
-| **Terraform** | Terraform shops, multi-cloud | [deploy/terraform/](../deploy/terraform/) |
 
 **Recommendation for new users:** Use CloudFormation via the AWS Console. Upload the template, fill in the form, click Create. No CLI needed.
 
@@ -168,16 +167,6 @@ sam deploy --guided --template-file template.yaml
 # Follow the interactive prompts
 ```
 
-### Option C: Terraform
-
-```bash
-cd deploy/terraform
-terraform init
-terraform plan -var="environment_name=my-openclaw" -var="instance_type=t4g.medium"
-terraform apply -var="environment_name=my-openclaw" -var="profile_name=builder" -var="instance_type=t4g.medium"
-```
-
----
 
 ## Step 4: Connect and Verify
 
@@ -187,11 +176,6 @@ terraform apply -var="environment_name=my-openclaw" -var="profile_name=builder" 
 ```bash
 aws cloudformation describe-stacks --stack-name my-openclaw \
   --query 'Stacks[0].Outputs[?OutputKey==`InstanceId`].OutputValue' --output text
-```
-
-**Terraform:**
-```bash
-terraform output instance_id
 ```
 
 ### Connect via SSM Session Manager
@@ -354,11 +338,6 @@ The data volume persists across stop/start. Loki's gateway auto-starts on boot.
 **CloudFormation/SAM:**
 ```bash
 aws cloudformation delete-stack --stack-name my-openclaw --region us-east-1
-```
-
-**Terraform:**
-```bash
-terraform destroy -var="environment_name=my-openclaw"
 ```
 
 This removes all resources. The data volume has `DeleteOnTermination: false` — you'll need to delete it manually if you want to remove all data.

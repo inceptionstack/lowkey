@@ -50,7 +50,7 @@
 
 ### Step 1: Install Lowkey
 
-Run `curl -sfL install.lowkey.run | bash` — the installer walks you through **pack**, **profile**, **instance size**, and **deploy method** (CloudFormation or Terraform).
+Run `curl -sfL install.lowkey.run | bash` — the installer walks you through **pack**, **profile**, **instance size**, and **deploy method** (CloudFormation CLI or Console).
 
 > **📊 Telemetry opt-out:** The installer sends anonymous install telemetry (start/success/failure + OS/arch/duration — no code, credentials, IPs, or hostnames). To opt out before installing:
 > ```bash
@@ -65,7 +65,7 @@ Run `curl -sfL install.lowkey.run | bash` — the installer walks you through **
 | `--non-interactive` | Skip all prompts, use defaults (aliases: `--yes`, `-y`) |
 | `--pack <name>` | Agent pack: `openclaw`, `claude-code`, `hermes`, `nemoclaw`, `kiro-cli`, `codex-cli`, `pi`, `ironclaw`, `roundhouse` |
 | `--profile <name>` | Permission profile: `builder`, `account_assistant`, `personal_assistant` |
-| `--method <method>` | Deploy method: `cfn` (CloudFormation), `terraform` / `tf` |
+| `--method <method>` | Deploy method: `cfn` (CloudFormation) |
 
 **Permission profiles:**
 
@@ -89,7 +89,7 @@ Run `curl -sfL install.lowkey.run | bash` — the installer walks you through **
 
 The installer discovers packs dynamically and asks which to deploy. Experimental packs are clearly marked.
 
-> **Works from AWS CloudShell!** You can run the installer directly from [AWS CloudShell](https://console.aws.amazon.com/cloudshell/) — no local setup needed. CloudShell already has AWS credentials configured via your console session. If you pick Terraform as the deployment method, the installer will offer to install it automatically (no root required).
+> **Works from AWS CloudShell!** You can run the installer directly from [AWS CloudShell](https://console.aws.amazon.com/cloudshell/) — no local setup needed. CloudShell already has AWS credentials configured via your console session.
 
 <details>
 <summary><strong>Manual deploy (alternative)</strong></summary>
@@ -182,7 +182,7 @@ Remove one or all Lowkey deployments from your account:
 curl -sfL uninstall.lowkey.run | bash
 ```
 
-Finds deployments by tag, lets you pick which to remove, deletes CloudFormation stacks or cleans up resources manually (Terraform deploys), and optionally removes state buckets/lock tables.
+Finds deployments by tag, lets you pick which to remove, deletes CloudFormation stacks (legacy Terraform deploys are still torn down via a pinned legacy ref), and optionally removes state buckets/lock tables.
 
 ---
 
@@ -208,7 +208,7 @@ Lowkey uses a **pack-based architecture** for deploying different AI agent runti
 ### How It Works
 
 ```
-install.sh → picks pack → CFN/SAM/Terraform → EC2 instance
+install.sh → picks pack → CloudFormation → EC2 instance
   └── bootstrap.sh --pack openclaw --region us-east-1 --model ...
         ├── Phase 1: System setup (SSM, Node.js, volumes)
         ├── Writes /tmp/loki-pack-config.json (packs read via jq)
@@ -253,7 +253,7 @@ To add a new agent runtime:
 
 1. Create `packs/<name>/` with `manifest.yaml`, `install.sh`, and `resources/`
 2. Add the pack to `packs/registry.yaml` with type, deps, and infra requirements
-3. Add to the `PackName` AllowedValues in all 3 deploy templates (CFN, SAM, Terraform)
+3. Add to the `PackName` AllowedValues in the CloudFormation template
 4. Add to the pack selection menu in `install.sh`
 
 See existing packs for the pattern. Each `install.sh` must be standalone-runnable with `--key value` CLI args and support `--help`.
@@ -294,7 +294,7 @@ These three capabilities are the building blocks. **Lowkey is what you get when 
 
 Lowkey is an open-source, deploy-it-yourself AI agent that lives in your AWS account (usually one per account so the agents don't step on each other's toes) and builds real code, infrastructure, deployments and configurations. 
 
-Clone the repo, deploy via CloudFormation, SAM, or Terraform, and within minutes you have a 24/7 agent running in your account , connected to Amazon Bedrock (by default, you can change that), loaded with AWS infrastructure skills, and ready to build. The agent is accessible via Telegram, Discord, Slack, or a terminal UI, and maintains full memory across sessions so it always knows what it built, what's deployed, and what state everything is in.
+Clone the repo, deploy via CloudFormation, and within minutes you have a 24/7 agent running in your account , connected to Amazon Bedrock (by default, you can change that), loaded with AWS infrastructure skills, and ready to build. The agent is accessible via Telegram, Discord, Slack, or a terminal UI, and maintains full memory across sessions so it always knows what it built, what's deployed, and what state everything is in.
 
 Lowkey handles the complete build lifecycle inside your AWS account:
 
@@ -403,7 +403,7 @@ Lowkey isn't a one-shot tool you open when you need something. It's an always-on
 
 Lowkey is built on [OpenClaw](https://github.com/openclaw/openclaw), the open-source AI agent framework. The [lowkey](https://github.com/inceptionstack/lowkey) repository packages everything needed to deploy a production-ready Lowkey instance:
 
-**1. One-click deployment.** Choose your IaC tool  (CloudFormation, SAM, or Terraform) and deploy. The template creates an isolated VPC, a T4g.xlarge EC2 instance by default (recommended so it can really do things like build run tests, build code, dockerize things and more, as a real dev machine), IAM roles, security services, and installs Lowkey with a pre-configured workspace. Total deploy time: \~4-10 minutes.
+**1. One-click deployment.** Deploy the CloudFormation template. It creates an isolated VPC, a T4g.xlarge EC2 instance by default (recommended so it can really do things like build run tests, build code, dockerize things and more, as a real dev machine), IAM roles, security services, and installs Lowkey with a pre-configured workspace. Total deploy time: \~4-10 minutes.
 
 **2. Configurable monitoring.** The deployment includes five individually toggleable AWS security services — Security Hub, GuardDuty, Inspector, Access Analyzer, and AWS Config — all enabled by default. For test/dev environments, disable what you don't need. The EC2 instance uses SSM Session Manager instead of SSH (no open ports), and the Lowkey gateway only listens on localhost (not exposed to the network). **Note:** Enabling these services doesn't make the agent itself secure — it means the agent can surface findings from these tools. You are still responsible for reviewing and acting on them.
 
@@ -519,7 +519,7 @@ Built on [OpenClaw](https://github.com/openclaw/openclaw), [Hermes](https://gith
 
 | Repo | Description |
 |------|-------------|
-| **[lowkey](https://github.com/inceptionstack/lowkey)** | Deploy templates (CloudFormation, SAM, Terraform), pack system, bootstrap scripts, brain files |
+| **[lowkey](https://github.com/inceptionstack/lowkey)** | Deploy templates (CloudFormation), pack system, bootstrap scripts, brain files |
 | **[loki-skills](https://github.com/inceptionstack/loki-skills)** | Agent skills library — AWS infrastructure, observability, payments, and more (OpenClaw + Hermes) |
 | **[bedrockify](https://github.com/inceptionstack/bedrockify)** | OpenAI-compatible proxy for Amazon Bedrock — chat completions + embeddings in one binary |
 | **[ai-patterns](https://github.com/inceptionstack/ai-patterns)** | AI Agent Architecture Patterns — definitions, naming, and design considerations |

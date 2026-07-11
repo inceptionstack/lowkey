@@ -15,7 +15,7 @@ These influence `install.sh` when you pipe it to bash:
 
 ## Instance — set by CFN UserData
 
-CloudFormation / Terraform export these into the bootstrap UserData. They're passed to `deploy/bootstrap.sh` which writes them into `/tmp/loki-pack-config.json`:
+CloudFormation exports these into the bootstrap UserData. They're passed to `deploy/bootstrap.sh` which writes them into `/tmp/loki-pack-config.json`:
 
 | Env var | CFN parameter | Purpose |
 |---|---|---|

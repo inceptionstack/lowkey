@@ -6,7 +6,7 @@ Deploy a fully configured [Loki](https://github.com/inceptionstack/lowkey) (powe
 
 - AWS account with admin access
 - Bedrock model access enabled (the template auto-submits the use case form, but model activation can take ~15 minutes)
-- One of: AWS CLI, SAM CLI, or Terraform installed
+- AWS CLI installed
 
 ## Choose Your Deployment Method
 
@@ -14,7 +14,6 @@ Deploy a fully configured [Loki](https://github.com/inceptionstack/lowkey) (powe
 |--------|--------|----------|
 | [CloudFormation](cloudformation/) | `deploy/cloudformation/` | Console deploys, StackSets, Organizations |
 | [SAM](sam/) | `deploy/sam/` | Serverless-familiar teams, `sam deploy --guided` |
-| [Terraform](terraform/) | `deploy/terraform/` | Terraform shops, multi-cloud workflows |
 
 ## What Gets Deployed
 

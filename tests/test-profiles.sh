@@ -499,12 +499,6 @@ else
   fail_test "install.sh: ProfileName missing from source (not yet implemented)"
 fi
 
-if grep -q "profile_name" "$INSTALL_SH" 2>/dev/null; then
-  pass "install.sh: profile_name found in source (TF param)"
-else
-  fail_test "install.sh: profile_name missing from source (TF param)"
-fi
-
 if grep -q "PRESELECT_PROFILE" "$INSTALL_SH" 2>/dev/null; then
   pass "install.sh: PRESELECT_PROFILE variable found"
 else
@@ -576,39 +570,6 @@ else
   fail_test "CFN template: loki:profile instance tag missing"
 fi
 
-# ── Section 14: Terraform has profile_name ────────────────────────────────────
-header "Test: Terraform profile_name variable"
-
-TF_VARS="${SCRIPT_DIR}/deploy/terraform/variables.tf"
-TF_MAIN="${SCRIPT_DIR}/deploy/terraform/main.tf"
-
-if grep -q "profile_name" "$TF_VARS" 2>/dev/null; then
-  pass "Terraform variables.tf: profile_name variable found"
-else
-  fail_test "Terraform variables.tf: profile_name variable missing"
-fi
-
-if grep -q "contains.*builder.*account_assistant.*personal_assistant" "$TF_VARS" 2>/dev/null; then
-  pass "Terraform variables.tf: profile_name has validation"
-else
-  fail_test "Terraform variables.tf: profile_name missing validation"
-fi
-
-if grep -q "loki:profile" "$TF_MAIN" 2>/dev/null; then
-  pass "Terraform main.tf: loki:profile tag found"
-else
-  fail_test "Terraform main.tf: loki:profile tag missing"
-fi
-
-# Check TF policy files
-for pf in account_assistant_deny.json account_assistant_bedrock.json personal_assistant.json bootstrap_operations.json; do
-  if [[ -f "${SCRIPT_DIR}/deploy/terraform/policies/${pf}" ]]; then
-    pass "TF policies/$pf exists"
-  else
-    fail_test "TF policies/$pf: file missing"
-  fi
-done
-
 # ── bash -n syntax checks on all modified shell scripts ───────────────────────
 header "Test: bash -n syntax checks"
 
@@ -622,19 +583,6 @@ for script in "$INSTALL_SH" "${SCRIPT_DIR}/deploy/bootstrap.sh"; do
 done
 
 # ── Results ───────────────────────────────────────────────────────────────────
-printf "\033[1mTest: Policy file DRY check (profiles/ vs deploy/terraform/policies/)\033[0m\n"
-for pfile in account_assistant_deny.json account_assistant_bedrock.json personal_assistant.json bootstrap_operations.json; do
-  if [[ -f "${PROFILES_DIR}/${pfile}" ]] && [[ -f "${SCRIPT_DIR}/deploy/terraform/policies/${pfile}" ]]; then
-    if diff -q "${PROFILES_DIR}/${pfile}" "${SCRIPT_DIR}/deploy/terraform/policies/${pfile}" >/dev/null 2>&1; then
-      pass "DRY: ${pfile} identical in profiles/ and deploy/terraform/policies/"
-    else
-      fail "DRY DRIFT: ${pfile} differs between profiles/ and deploy/terraform/policies/"
-    fi
-  else
-    fail "DRY: ${pfile} missing in one location"
-  fi
-done
-
 printf "\033[1mTest: Deny policy does NOT block SSM Agent\033[0m\n"
 # ssm:GetParameter must NOT be in the deny — it breaks SSM Session Manager
 if grep -q '"ssm:GetParameter"' "${PROFILES_DIR}/account_assistant_deny.json" 2>/dev/null; then
