@@ -100,8 +100,8 @@ ok "node found: ${NODE_VERSION}"
 # ── Install OpenClaw ──────────────────────────────────────────────────────────
 step "Installing OpenClaw"
 
-# Pin to tested version for stability — update deliberately, not automatically
-OPENCLAW_VERSION="2026.5.3-1"
+# Pin to tested version for stability — update deliberately
+OPENCLAW_VERSION="2026.6.11"
 npm install -g "openclaw@${OPENCLAW_VERSION}"
 
 # Reshim if mise is available
@@ -120,20 +120,20 @@ fi
 OC_VERSION="$(openclaw --version 2>/dev/null || echo unknown)"
 ok "OpenClaw installed: ${OC_VERSION}"
 
-# ── Patch pi-coding-agent for AWS SDK (instance profile) auth ────────────────
-# pi-coding-agent's auth pre-flight rejects AWS SDK auth when no API key is set
-# (EC2 instance roles use IMDS, not env vars). Patch two files:
-#   1. model-registry.js: hasConfiguredAuth() must return true for amazon-bedrock
-#   2. agent-session.js: _getRequiredRequestAuth() must allow undefined apiKey for bedrock
-# These patches will be overwritten on OpenClaw update — upstream fix needed.
-step "Patching pi-coding-agent for Bedrock instance-profile auth"
-
-PATCH_SCRIPT="${SCRIPT_DIR}/resources/patch-pi-agent.py"
-if [[ -f "${PATCH_SCRIPT}" ]]; then
-  python3 "${PATCH_SCRIPT}" "${NODE_PREFIX}" && ok "pi-coding-agent patched for Bedrock auth" \
-    || warn "pi-coding-agent patch had warnings (see above)"
+# ── Install Bedrock provider plugin (required since OpenClaw 2026.6.x) ───────
+# In 2026.6.x the bedrock-converse-stream transport was extracted into an
+# external plugin. Without it every LLM request fails with:
+#   "No API provider registered for api: bedrock-converse-stream"
+step "Installing Bedrock provider plugin"
+# Idempotent: install if missing, update if already present
+if openclaw plugins list 2>/dev/null | grep -q "amazon-bedrock"; then
+  openclaw plugins update @openclaw/amazon-bedrock-provider \
+    && ok "@openclaw/amazon-bedrock-provider updated" \
+    || warn "Bedrock plugin update failed (non-fatal — existing version still active)"
 else
-  warn "patch-pi-agent.py not found — skipping pi-coding-agent patches"
+  openclaw plugins install @openclaw/amazon-bedrock-provider \
+    && ok "@openclaw/amazon-bedrock-provider installed" \
+    || { warn "Bedrock provider plugin install failed — gateway will not start"; exit 1; }
 fi
 
 # ── Workspace and state dir ───────────────────────────────────────────────────

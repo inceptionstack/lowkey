@@ -3,8 +3,7 @@ version: "1.0.0"
 type: agent
 description: "OpenClaw stateful AI agent with gateway"
 
-deps:
-  - bedrockify
+deps: []
 
 requirements:
   arch:
