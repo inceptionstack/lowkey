@@ -1398,7 +1398,7 @@ check_bedrock_access() {
       --region "$probe_region" 2>&1 >/dev/null); then
     BEDROCK_ACCESS_OK="true"
     ok "Bedrock model access verified (${probe_model} @ ${probe_region})"
-  elif echo "$invoke_err" | grep -qi "ThrottlingException\|TooManyRequests\|ServiceQuotaExceeded"; then
+  elif grep -qiE "ThrottlingException|TooManyRequests|ServiceQuotaExceeded" <<<"$invoke_err"; then
     # Throttled = the account CAN invoke; access is granted
     BEDROCK_ACCESS_OK="true"
     ok "Bedrock model access verified (throttled response — access is enabled)"
@@ -2149,8 +2149,15 @@ show_summary() {
   summary+="Profile       ${PROFILE_NAME}\n"
   summary+="Instance      ${INSTANCE_TYPE}\n"
   summary+="Region        ${DEPLOY_REGION}\n"
-  [[ "$BEDROCK_REGION" != "$DEPLOY_REGION" ]] && summary+="Bedrock       ${BEDROCK_REGION} (cross-region inference)\n"
-  [[ "${BEDROCK_ACCESS_OK:-unknown}" == "false" ]] && summary+="Bedrock       ⚠ model access NOT enabled — use 3rd-party inference after install\n"
+  if [[ "${BEDROCK_ACCESS_OK:-unknown}" == "false" ]]; then
+    if [[ "$BEDROCK_REGION" != "$DEPLOY_REGION" ]]; then
+      summary+="Bedrock       ${BEDROCK_REGION} ⚠ model access NOT enabled — use 3rd-party inference after install\n"
+    else
+      summary+="Bedrock       ⚠ model access NOT enabled — use 3rd-party inference after install\n"
+    fi
+  elif [[ "$BEDROCK_REGION" != "$DEPLOY_REGION" ]]; then
+    summary+="Bedrock       ${BEDROCK_REGION} (cross-region inference)\n"
+  fi
   [[ -n "${EXISTING_VPC_ID:-}" ]] && summary+="VPC           reuse ${EXISTING_VPC_ID}\n"
   summary+="Security      ${security_summary}\n"
   summary+="Environment   ${ENV_NAME}"
