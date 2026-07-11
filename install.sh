@@ -1330,6 +1330,97 @@ preflight_checks() {
   else
     ok "Using current account and region"
   fi
+
+  check_bedrock_access
+}
+
+# Verify Bedrock is reachable AND models can actually be invoked on this
+# account. Model access grants are per-account/per-region and are the #1
+# silent install-killer: everything deploys green, then the agent can't
+# think. Non-fatal — warns and lets the user continue informed.
+BEDROCK_ACCESS_OK="unknown"
+check_bedrock_access() {
+  local check_region="${DEPLOY_REGION:-$REGION}"
+  # Mirror build_deploy_params(): probe the region Bedrock will actually use
+  local bedrock_allowed="us-east-1 us-west-2 eu-west-1 eu-central-1 eu-north-1 ap-northeast-1 ap-southeast-1"
+  local probe_region
+  if [[ " $bedrock_allowed " == *" $check_region "* ]]; then
+    probe_region="$check_region"
+  else
+    probe_region="us-east-1"
+  fi
+
+  echo ""
+  info "Checking Bedrock access in ${probe_region}..."
+
+  # 1) Service reachable + IAM allows Bedrock at all?
+  if ! aws bedrock list-foundation-models --region "$probe_region" \
+       --query 'modelSummaries[0].modelId' --output text >/dev/null 2>&1; then
+    BEDROCK_ACCESS_OK="false"
+    warn "Bedrock is not reachable in ${probe_region} (service unavailable or IAM denies bedrock:*)."
+    _bedrock_access_guidance "$probe_region"
+    return 0
+  fi
+
+  # 2) Can a model actually be invoked? (catches missing model-access grants,
+  #    which list-foundation-models does NOT detect)
+  # Cross-region inference profile prefix must match the probe region's geo
+  local geo_prefix
+  case "$probe_region" in
+    eu-*) geo_prefix="eu" ;;
+    ap-*) geo_prefix="apac" ;;
+    *)    geo_prefix="us" ;;
+  esac
+  local probe_model="${geo_prefix}.anthropic.claude-sonnet-4-6"
+
+  # Older AWS CLI builds lack `bedrock-runtime converse`; skip gracefully
+  if ! aws bedrock-runtime converse help >/dev/null 2>&1; then
+    BEDROCK_ACCESS_OK="unknown"
+    warn "AWS CLI too old to test model invocation — skipping invoke check."
+    ok "Bedrock service reachable in ${probe_region}"
+    return 0
+  fi
+
+  local invoke_err=""
+  if invoke_err=$(aws bedrock-runtime converse \
+      --model-id "$probe_model" \
+      --messages '[{"role":"user","content":[{"text":"ping"}]}]' \
+      --inference-config '{"maxTokens":1}' \
+      --region "$probe_region" 2>&1 >/dev/null); then
+    BEDROCK_ACCESS_OK="true"
+    ok "Bedrock model access verified (${probe_model} @ ${probe_region})"
+  elif echo "$invoke_err" | grep -qi "ThrottlingException\|TooManyRequests\|ServiceQuotaExceeded"; then
+    # Throttled = the account CAN invoke; access is granted
+    BEDROCK_ACCESS_OK="true"
+    ok "Bedrock model access verified (throttled response — access is enabled)"
+  else
+    BEDROCK_ACCESS_OK="false"
+    warn "Bedrock is reachable, but model invocation FAILED on this account."
+    echo -e "    ${DIM}$(echo "$invoke_err" | head -1)${NC}"
+    _bedrock_access_guidance "$probe_region"
+  fi
+}
+
+_bedrock_access_guidance() {
+  local probe_region="$1"
+  echo ""
+  echo -e "  ${YELLOW}${BOLD}Bedrock model access is currently NOT enabled for this account.${NC}"
+  echo ""
+  echo "  The install can continue, but the agent will not be able to use"
+  echo "  Bedrock inference out of the box. What this means for you:"
+  echo ""
+  echo -e "  ${BOLD}1. After install:${NC} log in to your chosen agent and configure a"
+  echo "     3rd-party inference provider (e.g. an Anthropic or OpenAI API key)"
+  echo "     so the agent works while Bedrock access is being sorted out."
+  echo ""
+  echo -e "  ${BOLD}2. In parallel:${NC} ask your AWS account representatives / support to"
+  echo "     help enable Bedrock model access and raise the Bedrock quotas"
+  echo "     for this account."
+  echo ""
+  echo "  Self-service model access (if available to your account):"
+  echo "  https://${probe_region}.console.aws.amazon.com/bedrock/home?region=${probe_region}#/modelaccess"
+  echo ""
+  confirm_or_abort "Continue with the install anyway?" "default_yes"
 }
 
 check_vpc_quota() {
@@ -2050,6 +2141,7 @@ show_summary() {
   summary+="Instance      ${INSTANCE_TYPE}\n"
   summary+="Region        ${DEPLOY_REGION}\n"
   [[ "$BEDROCK_REGION" != "$DEPLOY_REGION" ]] && summary+="Bedrock       ${BEDROCK_REGION} (cross-region inference)\n"
+  [[ "${BEDROCK_ACCESS_OK:-unknown}" == "false" ]] && summary+="Bedrock       ⚠ model access NOT enabled — use 3rd-party inference after install\n"
   [[ -n "${EXISTING_VPC_ID:-}" ]] && summary+="VPC           reuse ${EXISTING_VPC_ID}\n"
   summary+="Security      ${security_summary}\n"
   summary+="Environment   ${ENV_NAME}"
