@@ -167,7 +167,7 @@ else
 fi
 
 # --help mentions key flags
-for flag in --region --model --haiku-model --help; do
+for flag in --region --model --haiku-model --version --skip-smoke-test --help; do
   if printf '%s' "${HELP_OUT}" | grep -q -- "${flag}"; then
     pass "install.sh --help mentions ${flag}"
   else
@@ -251,39 +251,127 @@ fi
 # ── Test: settings.json structure ────────────────────────────────────────────
 header "Test: ~/.claude/settings.json"
 
-# The settings.json content is hardcoded (not parameterised) in install.sh
-SETTINGS_JSON='{
-  "permissions": {
-    "allow": ["Bash(*)", "Read(*)", "Write(*)", "Edit(*)"],
-    "deny": []
-  }
-}'
-
+# install.sh merges settings.json via an embedded python3 heredoc.
+# Extract the merge script and exercise it against a sandbox settings file.
 if command -v python3 &>/dev/null; then
-  if python3 -c "import json, sys; json.loads(sys.stdin.read())" <<< "${SETTINGS_JSON}" 2>/dev/null; then
-    pass "settings.json: valid JSON"
+  MERGE_PY="$(sed -n "/^python3 <<'PYEOF'$/,/^PYEOF$/p" "${INSTALL}" | sed '1d;$d')"
+
+  if [[ -n "${MERGE_PY}" ]]; then
+    pass "install.sh contains embedded settings merge script"
   else
-    fail "settings.json: invalid JSON"
+    fail "install.sh missing embedded settings merge script"
+  fi
+
+  TMP_SETTINGS="$(mktemp)"
+
+  # Fresh file: created with env + permissions
+  rm -f "${TMP_SETTINGS}"
+  if SETTINGS_FILE="${TMP_SETTINGS}" CC_REGION="us-east-1" \
+     CC_MODEL="us.anthropic.claude-sonnet-4-6" \
+     CC_HAIKU_MODEL="us.anthropic.claude-haiku-4-5-20251001-v1:0" \
+     python3 -c "${MERGE_PY}" 2>/dev/null; then
+    pass "settings merge: runs on fresh (absent) file"
+  else
+    fail "settings merge: failed on fresh file"
   fi
 
   if python3 -c "
-import json, sys
-data = json.loads(sys.stdin.read())
-perms = data.get('permissions', {})
-allow = perms.get('allow', [])
-deny = perms.get('deny', [])
-assert 'Bash(*)' in allow, 'Bash(*) missing'
-assert 'Read(*)' in allow, 'Read(*) missing'
-assert 'Write(*)' in allow, 'Write(*) missing'
-assert 'Edit(*)' in allow, 'Edit(*) missing'
-assert isinstance(deny, list) and len(deny) == 0, 'deny should be empty'
-" <<< "${SETTINGS_JSON}" 2>/dev/null; then
-    pass "settings.json: permissions allow Bash(*), Read(*), Write(*), Edit(*) with empty deny"
+import json
+d = json.load(open('${TMP_SETTINGS}'))
+env = d.get('env', {})
+assert env.get('CLAUDE_CODE_USE_BEDROCK') == '1'
+assert env.get('AWS_REGION') == 'us-east-1'
+assert env.get('ANTHROPIC_MODEL') == 'us.anthropic.claude-sonnet-4-6'
+assert env.get('ANTHROPIC_DEFAULT_HAIKU_MODEL')
+allow = d.get('permissions', {}).get('allow', [])
+for r in ['Bash(*)', 'Read(*)', 'Write(*)', 'Edit(*)']:
+    assert r in allow, r
+" 2>/dev/null; then
+    pass "settings merge: env block (Bedrock) + permissions written"
   else
-    fail "settings.json: permissions structure invalid"
+    fail "settings merge: env block or permissions missing"
   fi
+
+  # Existing file: user keys must survive (no clobber)
+  cat > "${TMP_SETTINGS}" <<'JSONEOF'
+{
+  "myCustomKey": "keep-me",
+  "env": {"MY_VAR": "custom"},
+  "permissions": {"allow": ["WebFetch(*)"], "deny": ["Bash(rm*)"]}
+}
+JSONEOF
+  SETTINGS_FILE="${TMP_SETTINGS}" CC_REGION="eu-west-1" \
+    CC_MODEL="m1" CC_HAIKU_MODEL="m2" python3 -c "${MERGE_PY}" 2>/dev/null || true
+  if python3 -c "
+import json
+d = json.load(open('${TMP_SETTINGS}'))
+assert d.get('myCustomKey') == 'keep-me', 'custom top-level key clobbered'
+assert d['env'].get('MY_VAR') == 'custom', 'custom env var clobbered'
+assert d['env'].get('CLAUDE_CODE_USE_BEDROCK') == '1'
+allow = d['permissions']['allow']
+assert 'WebFetch(*)' in allow, 'user allow rule clobbered'
+assert 'Bash(*)' in allow
+assert 'Bash(rm*)' in d['permissions']['deny'], 'user deny rule clobbered'
+" 2>/dev/null; then
+    pass "settings merge: idempotent — user customizations preserved"
+  else
+    fail "settings merge: clobbers user customizations"
+  fi
+
+  rm -f "${TMP_SETTINGS}"
 else
-  skip "settings.json structure tests: python3 not available"
+  skip "settings merge tests: python3 not available"
+fi
+
+# Version pin present
+if grep -qE 'CLAUDE_CODE_VERSION_DEFAULT="[0-9]+\.[0-9]+\.[0-9]+"' "${INSTALL}"; then
+  pass "install.sh pins Claude Code version (CLAUDE_CODE_VERSION_DEFAULT)"
+else
+  fail "install.sh missing version pin"
+fi
+
+# Pinned version is passed to the native installer
+if grep -q 'claude-code-install.sh "${CC_VERSION}"' "${INSTALL}"; then
+  pass "install.sh passes pinned version to native installer"
+else
+  fail "install.sh does not pass version to native installer"
+fi
+
+# First-class plugin CLI (not just the slash-command hack)
+if grep -q 'claude plugin install' "${INSTALL}"; then
+  pass "install.sh uses first-class 'claude plugin install'"
+else
+  fail "install.sh missing first-class plugin CLI usage"
+fi
+
+# Plugin idempotency guard
+if grep -q 'claude plugin list' "${INSTALL}"; then
+  pass "install.sh guards plugin installs with 'claude plugin list'"
+else
+  fail "install.sh missing plugin idempotency guard"
+fi
+
+# AWS MCP proxy wiring
+if grep -q 'claude mcp add' "${INSTALL}" && grep -q 'MCP_PROXY_VERSION' "${INSTALL}"; then
+  pass "install.sh wires AWS MCP proxy via 'claude mcp add' (pinned version)"
+else
+  fail "install.sh missing AWS MCP proxy wiring"
+fi
+
+# Done marker is the last step (after plugins/skills/MCP)
+LAST_MARKER_LINE="$(grep -n 'write_done_marker' "${INSTALL}" | tail -1 | cut -d: -f1)"
+LAST_MCP_LINE="$(grep -n 'claude mcp add' "${INSTALL}" | tail -1 | cut -d: -f1)"
+if [[ -n "${LAST_MARKER_LINE}" && -n "${LAST_MCP_LINE}" && "${LAST_MARKER_LINE}" -gt "${LAST_MCP_LINE}" ]]; then
+  pass "write_done_marker runs after all install steps"
+else
+  fail "write_done_marker should be the final step"
+fi
+
+# PATH persistence for future shells
+if grep -q 'export PATH="\${HOME}/.local/bin' "${INSTALL}"; then
+  pass "install.sh persists ~/.local/bin on PATH in profile target"
+else
+  fail "install.sh does not persist PATH for future shells"
 fi
 
 # install.sh writes settings.json

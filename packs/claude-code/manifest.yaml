@@ -1,5 +1,5 @@
 name: claude-code
-version: "1.0.0"
+version: "2.0.0"
 type: agent
 description: "Claude Code — Anthropic's coding agent with native Bedrock support"
 
@@ -15,6 +15,9 @@ requirements:
   min_instance_type: t4g.large
 
 params:
+  - name: version
+    description: "Claude Code version to install (X.Y.Z, stable, or latest)"
+    default: "2.1.197"
   - name: region
     description: "AWS region for Bedrock"
     default: us-east-1
