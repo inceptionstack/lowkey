@@ -1,8 +1,11 @@
-# Hermes Agent — configured to use bedrockify (Bedrock proxy)
+# Hermes Agent — native Bedrock (Converse API, no proxy needed)
 model:
   default: "${MODEL}"
-  provider: "custom"
-  base_url: "http://127.0.0.1:${BEDROCKIFY_PORT}/v1"
+  provider: bedrock
+  base_url: https://bedrock-runtime.${REGION}.amazonaws.com
+
+bedrock:
+  region: ${REGION}
 
 terminal:
   backend: "local"

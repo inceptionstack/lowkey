@@ -757,7 +757,7 @@ Options:
                                  hits from this invocation are tagged
                                  is_test and excluded from dashboard stats.
   --auto-rename-account-enabled  Enable auto-rename of AWS account to
-                                 Loki-<name> in headless (-y) mode
+                                 Lowkey-<name> in headless (-y) mode
   --disable-account-rename       Skip account rename entirely
   -h, --help                     Show this help and exit
 
@@ -2850,16 +2850,16 @@ _account_already_prefixed() {
   local current_name="$1"
   local lower_name
   lower_name=$(printf '%s' "$current_name" | tr '[:upper:]' '[:lower:]')
-  if [[ "$lower_name" == loki* ]]; then
+  if [[ "$lower_name" == lowkey* ]]; then
     local display_name
     display_name=$(printf '%s' "$current_name" | tr -d '\000-\037')
-    ok "Account already named for Loki: $(printf '%s' "$display_name")"
+    ok "Account already named for Lowkey: $(printf '%s' "$display_name")"
     # Write SSM params if they don't exist yet (first install with pre-existing prefix).
     # Note: stripped_original is a best-guess — if account was manually named
-    # "LOKI-Foo", we store "Foo" but the true pre-Loki original is unknown.
+    # "LOWKEY-Foo", we store "Foo" but the true pre-Lowkey original is unknown.
     if ! aws ssm get-parameter --name "/loki/original-account-name" \
         --region "${DEPLOY_REGION:-$REGION}" --output text >/dev/null 2>&1; then
-      local stripped_original="${current_name:5}"  # strip 5-char prefix (Loki-)
+      local stripped_original="${current_name:7}"  # strip 7-char prefix (Lowkey-)
       [[ -n "$stripped_original" ]] || stripped_original="$ACCOUNT_ID"
       aws ssm put-parameter --name "/loki/original-account-name" \
         --value "$stripped_original" --type String --overwrite \
@@ -2874,7 +2874,7 @@ _account_already_prefixed() {
   return 1
 }
 
-# Builds the proposed "Loki-<sanitized>" name.
+# Builds the proposed "Lowkey-<sanitized>" name.
 # Sets _RENAME_PROPOSED and _RENAME_WAS_TRUNCATED.
 _build_proposed_name() {
   local current_name="$1"
@@ -2884,9 +2884,9 @@ _build_proposed_name() {
 
   sanitized=$(_sanitize_account_name "$current_name")
   if [[ -z "$sanitized" ]]; then
-    _RENAME_PROPOSED="Loki-${ACCOUNT_ID}"
+    _RENAME_PROPOSED="Lowkey-${ACCOUNT_ID}"
   else
-    _RENAME_PROPOSED="Loki-${sanitized}"
+    _RENAME_PROPOSED="Lowkey-${sanitized}"
   fi
 
   if [[ ${#_RENAME_PROPOSED} -gt 50 ]]; then
@@ -2895,7 +2895,7 @@ _build_proposed_name() {
     _RENAME_WAS_TRUNCATED=true
   fi
   if [[ ${#_RENAME_PROPOSED} -lt 6 ]]; then
-    _RENAME_PROPOSED="Loki-${ACCOUNT_ID}"
+    _RENAME_PROPOSED="Lowkey-${ACCOUNT_ID}"
     _RENAME_WAS_TRUNCATED=false
   fi
 }
@@ -2933,7 +2933,7 @@ _resolve_final_name() {
       "Current AWS account name:   ${safe_current}" \
       "Proposed AWS account name:  ${safe_proposed}" \
       "" \
-      "Adding the 'Loki-' prefix is highly recommended." \
+      "Adding the 'Lowkey-' prefix is highly recommended." \
       "It enables:" \
       "  • Governance & compliance tracking" \
       "  • Cost attribution across your organization" \

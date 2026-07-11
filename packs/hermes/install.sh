@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# packs/hermes/install.sh — Install Hermes Agent and configure it to use bedrockify
+# packs/hermes/install.sh — Install Hermes Agent with native Bedrock support
 #
 # Usage:
-#   ./install.sh [--region us-east-1] [--hermes-model global.anthropic.claude-opus-4-6-v1] [--bedrockify-port 8090]
+#   ./install.sh [--region us-east-1] [--hermes-model us.anthropic.claude-sonnet-4-6]
 #
 # Assumes:
-#   - bedrockify is already installed and running (see packs/bedrockify/)
-#   - curl available
-#   - IAM role with bedrock:InvokeModel permissions (handled by bedrockify)
+#   - Python 3.11+ available
+#   - IAM role with bedrock:InvokeModel + bedrock:InvokeModelWithResponseStream
 #
 # Idempotent: safe to re-run.
 
@@ -19,32 +18,24 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../common.sh"
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
-# Defaults from config file (written by bootstrap dispatcher), then CLI overrides
-# Note: reads "hermes_model" key (not "model") — must be a Bedrock model ID
-# that bedrockify accepts (same default as openclaw).
 PACK_ARG_REGION="$(pack_config_get region "us-east-1")"
-PACK_ARG_MODEL="$(pack_config_get hermes_model "global.anthropic.claude-opus-4-6-v1")"
-PACK_ARG_BEDROCKIFY_PORT="$(pack_config_get bedrockify_port "8090")"
+PACK_ARG_MODEL="$(pack_config_get hermes_model "us.anthropic.claude-sonnet-4-6")"
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 usage() {
   cat <<EOF
 Usage: $(basename "$0") [OPTIONS]
 
-Install Hermes Agent and configure it to use bedrockify.
+Install Hermes Agent with native Amazon Bedrock support (Converse API).
 
 Options:
   --region           AWS region for Bedrock         (default: us-east-1)
-  --hermes-model     Bedrock model ID                (default: global.anthropic.claude-opus-4-6-v1)
-  --bedrockify-port  Port where bedrockify listens  (default: 8090)
+  --hermes-model     Bedrock inference profile ID   (default: us.anthropic.claude-sonnet-4-6)
   --help             Show this help message
-
-Note: --model is ignored (it carries Bedrock model IDs from the dispatcher).
-      Use --hermes-model to override the model for Hermes.
 
 Examples:
   ./install.sh --region us-east-1
-  ./install.sh --hermes-model global.anthropic.claude-sonnet-4-6 --bedrockify-port 8090
+  ./install.sh --hermes-model us.anthropic.claude-opus-4-6-v1 --region us-west-2
 EOF
 }
 
@@ -52,55 +43,72 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --help|-h)          usage; exit 0 ;;
-    --region)           PACK_ARG_REGION="$2";           shift 2 ;;
-    --hermes-model)     PACK_ARG_MODEL="$2";             shift 2 ;;
-    --bedrockify-port)  PACK_ARG_BEDROCKIFY_PORT="$2";  shift 2 ;;
-    --model)            [[ $# -gt 1 ]] && shift 2 || shift ;;  # Ignore generic --model (Bedrock ID); use --hermes-model
+    --region)           PACK_ARG_REGION="$2";  shift 2 ;;
+    --hermes-model)     PACK_ARG_MODEL="$2";   shift 2 ;;
+    --model)            [[ $# -gt 1 ]] && shift 2 || shift ;;  # Ignore generic --model
     *) [[ $# -gt 1 ]] && [[ "$2" != --* ]] && shift 2 || shift ;;
   esac
 done
 
 REGION="${PACK_ARG_REGION}"
 MODEL="${PACK_ARG_MODEL}"
-BEDROCKIFY_PORT="${PACK_ARG_BEDROCKIFY_PORT}"
 
 pack_banner "hermes"
-log "region=${REGION} model=${MODEL} bedrockify-port=${BEDROCKIFY_PORT}"
+log "region=${REGION} model=${MODEL}"
 
 # ── Prerequisites ─────────────────────────────────────────────────────────────
 step "Checking prerequisites"
-require_cmd curl envsubst
-
-# Verify bedrockify is running
-HEALTH="$(curl -sf "http://127.0.0.1:${BEDROCKIFY_PORT}/" 2>&1)" || true
-if ! printf '%s' "${HEALTH}" | grep -q '"status":"ok"'; then
-  fail "bedrockify is not running on port ${BEDROCKIFY_PORT}. Install bedrockify pack first."
-fi
-ok "bedrockify is healthy on port ${BEDROCKIFY_PORT}"
+require_cmd curl
 
 # ── Install Hermes ─────────────────────────────────────────────────────────────
-step "Installing Hermes Agent"
+# Pin to tested version for reproducibility — update deliberately
+HERMES_VERSION="v2026.7.7.2"
+HERMES_COMMIT="b7751df34688835a108e0d630f3495fc11f3df79"
+
+step "Installing Hermes Agent ${HERMES_VERSION}"
 
 if command -v hermes &>/dev/null; then
-  HERMES_EXISTING="$(hermes --version 2>/dev/null || echo unknown)"
-  log "hermes already installed (${HERMES_EXISTING}) — reinstalling"
+  HERMES_EXISTING="$(hermes --version 2>/dev/null | head -1 || echo unknown)"
+  log "hermes already installed (${HERMES_EXISTING}) — upgrading to ${HERMES_VERSION}"
 fi
 
 curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh \
-  | bash -s -- --skip-setup
+  | bash -s -- --skip-setup --commit "${HERMES_COMMIT}"
 
 # Add local bin to PATH for current session
-export PATH="${HOME}/.local/bin:$PATH"
+export PATH="${HOME}/.local/bin:${HOME}/.hermes/bin:$PATH"
 
 if ! command -v hermes &>/dev/null; then
   fail "hermes command not found after install. Check PATH or install output."
 fi
 
-HERMES_VERSION="$(hermes --version 2>/dev/null || echo unknown)"
+HERMES_VERSION="$(hermes --version 2>/dev/null | head -1 || echo unknown)"
 ok "Hermes installed: ${HERMES_VERSION}"
 
+# ── Install Bedrock extras ─────────────────────────────────────────────────────
+step "Installing Bedrock provider (boto3)"
+
+HERMES_UV="${HOME}/.hermes/bin/uv"
+HERMES_VENV="${HOME}/.hermes/hermes-agent/venv"
+
+if [[ -x "${HERMES_UV}" && -d "${HOME}/.hermes/hermes-agent" ]]; then
+  cd "${HOME}/.hermes/hermes-agent"
+  "${HERMES_UV}" pip install -e ".[bedrock]" --python "${HERMES_VENV}/bin/python" --quiet 2>&1 \
+    && ok "Bedrock extras installed (boto3)" \
+    || warn "Bedrock extras install failed (non-fatal — boto3 may already be present)"
+else
+  # Fallback: pip install boto3 directly
+  if [[ -x "${HERMES_VENV}/bin/pip" ]]; then
+    "${HERMES_VENV}/bin/pip" install boto3 --quiet 2>&1 \
+      && ok "boto3 installed via pip" \
+      || warn "boto3 install failed — Bedrock provider may not work"
+  else
+    warn "Could not locate hermes venv pip — skipping boto3 install"
+  fi
+fi
+
 # ── Configure Hermes ──────────────────────────────────────────────────────────
-step "Configuring Hermes"
+step "Configuring Hermes for native Bedrock"
 
 mkdir -p "${HOME}/.hermes"
 
@@ -110,7 +118,7 @@ if [[ ! -f "${CONFIG_TPL}" ]]; then
   fail "Config template not found at ${CONFIG_TPL}"
 fi
 
-export MODEL BEDROCKIFY_PORT
+export MODEL REGION
 envsubst < "${CONFIG_TPL}" > "${HOME}/.hermes/config.yaml"
 ok "Hermes config written: ${HOME}/.hermes/config.yaml"
 
@@ -127,32 +135,24 @@ ok "Hermes env written: ${HOME}/.hermes/.env"
 # ── Verify end-to-end ─────────────────────────────────────────────────────────
 step "End-to-end verification"
 
-log "Testing bedrockify chat endpoint (quick sanity check)..."
+log "Testing native Bedrock via hermes..."
+REPLY="$(timeout 30 hermes -z "Say OK in exactly 2 words." 2>&1)" || true
 
-CHAT_RESP="$(curl -sf "http://127.0.0.1:${BEDROCKIFY_PORT}/v1/chat/completions" \
-  -H "Content-Type: application/json" \
-  -d "{\"model\":\"${MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"Say OK in exactly 2 words.\"}]}" \
-  --max-time 30 2>&1)" || true
-
-if printf '%s' "${CHAT_RESP}" | grep -q '"choices"'; then
-  REPLY="$(printf '%s' "${CHAT_RESP}" | python3 -c \
-    "import sys,json; print(json.load(sys.stdin)['choices'][0]['message']['content'])" 2>/dev/null \
-    || echo "(parse failed)")"
-  ok "Chat completions working — model replied: ${REPLY}"
+if [[ -n "${REPLY}" && "${REPLY}" != *"error"* && "${REPLY}" != *"Error"* ]]; then
+  ok "Bedrock working — model replied: ${REPLY}"
 else
-  warn "Chat test inconclusive (IAM role may lack bedrock:InvokeModel). Response: ${CHAT_RESP}"
+  warn "Bedrock test inconclusive (IAM role may lack permissions). Response: ${REPLY}"
 fi
 
-# ── Done ──────────────────────────────────────────────────────────────────────
-
-# ── Install loki-skills library ───────────────────────────────────────────────
-# Best-effort: pre-install skills for auto-discovery.
+# ── Install skills ────────────────────────────────────────────────────────────
 PACK_SKILLS_DIR="${HOME}/.hermes/skills"
 if ensure_skills_clone "${PACK_SKILLS_DIR}"; then
-  ok "Skills installed to ${PACK_SKILLS_DIR} (auto-discovered)"
+  ok "Skills installed to ${PACK_SKILLS_DIR}"
 else
   warn "Skills clone failed (optional; hermes is still usable without skills)"
 fi
+
+# ── Done ──────────────────────────────────────────────────────────────────────
 write_done_marker "hermes"
-printf "\n[PACK:hermes] INSTALLED — hermes CLI ready (model: %s via bedrockify:%s)\n" \
-  "${MODEL}" "${BEDROCKIFY_PORT}"
+printf "\n[PACK:hermes] INSTALLED — hermes CLI ready (model: %s, provider: bedrock, region: %s)\n" \
+  "${MODEL}" "${REGION}"
