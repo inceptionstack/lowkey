@@ -1656,7 +1656,7 @@ load_pack_registry() {
     PACK_EXPERIMENTAL+=("$pexp")
   done < <([ -n "$_PACK_REGISTRY" ] && jq -r '
     .packs | to_entries[]
-    | select(.value.type == "agent")
+    | select(.value.type == "agent" and (.value.hidden // false) == false)
     | "\(.key)|\(.value.description // .key)|\(if .value.experimental then "true" else "false" end)"
   ' "$_PACK_REGISTRY" 2>/dev/null \
     || echo "openclaw|OpenClaw -- stateful AI agent with persistent gateway|false")

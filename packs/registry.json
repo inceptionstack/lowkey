@@ -17,7 +17,7 @@
     },
     "claude-code": {
       "type": "agent",
-      "description": "Claude Code — Anthropic's coding agent with native Bedrock support",
+      "description": "Claude Code \u2014 Anthropic's coding agent with native Bedrock support",
       "deps": [],
       "instance_type": "t4g.large",
       "root_volume_gb": 40,
@@ -30,7 +30,7 @@
     },
     "openclaw": {
       "type": "agent",
-      "description": "OpenClaw — stateful AI agent with persistent gateway",
+      "description": "OpenClaw \u2014 stateful AI agent with persistent gateway",
       "deps": [
         "bedrockify"
       ],
@@ -47,7 +47,7 @@
     },
     "hermes": {
       "type": "agent",
-      "description": "Hermes — NousResearch CLI agent via bedrockify (experimental)",
+      "description": "Hermes \u2014 NousResearch CLI agent via bedrockify (experimental)",
       "deps": [
         "bedrockify"
       ],
@@ -62,7 +62,7 @@
     },
     "pi": {
       "type": "agent",
-      "description": "Pi — minimal terminal coding harness (experimental)",
+      "description": "Pi \u2014 minimal terminal coding harness (experimental)",
       "deps": [
         "bedrockify"
       ],
@@ -77,7 +77,7 @@
     },
     "ironclaw": {
       "type": "agent",
-      "description": "IronClaw — Rust-based AI agent by NEAR AI (experimental)",
+      "description": "IronClaw \u2014 Rust-based AI agent by NEAR AI (experimental)",
       "deps": [
         "bedrockify"
       ],
@@ -88,11 +88,12 @@
       "ports": {},
       "brain": false,
       "claude_code": false,
-      "experimental": true
+      "experimental": true,
+      "hidden": true
     },
     "nemoclaw": {
       "type": "agent",
-      "description": "NemoClaw — OpenClaw in sandboxed OpenShell with Bedrock inference",
+      "description": "NemoClaw \u2014 OpenClaw in sandboxed OpenShell with Bedrock inference",
       "deps": [
         "bedrockify"
       ],
@@ -107,11 +108,12 @@
       "requires_docker": true,
       "compatible_profiles": [
         "personal_assistant"
-      ]
+      ],
+      "hidden": true
     },
     "kiro-cli": {
       "type": "agent",
-      "description": "Kiro CLI v2 — AWS agentic IDE terminal client with MCP server support (experimental, headless mode available via --kiro-api-key)",
+      "description": "Kiro CLI v2 \u2014 AWS agentic IDE terminal client with MCP server support (experimental, headless mode available via --kiro-api-key)",
       "deps": [],
       "instance_type": "t4g.medium",
       "root_volume_gb": 40,
@@ -123,7 +125,7 @@
     },
     "codex-cli": {
       "type": "agent",
-      "description": "Codex CLI — OpenAI's coding agent (builder profile, authenticate post-deploy)",
+      "description": "Codex CLI \u2014 OpenAI's coding agent (builder profile, authenticate post-deploy)",
       "deps": [],
       "instance_type": "t4g.medium",
       "root_volume_gb": 40,
@@ -137,7 +139,7 @@
     },
     "roundhouse": {
       "type": "agent",
-      "description": "Roundhouse — AI coding agent with Telegram channel (pi-based)",
+      "description": "Roundhouse \u2014 AI coding agent with Telegram channel (pi-based)",
       "deps": [],
       "instance_type": "t4g.medium",
       "root_volume_gb": 40,
