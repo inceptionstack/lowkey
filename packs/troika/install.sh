@@ -68,7 +68,14 @@ while [[ $# -gt 0 ]]; do
     --model)         PACK_ARG_MODEL="$2";          shift 2 ;;
     --codex-model)   PACK_ARG_CODEX_MODEL="$2";   shift 2 ;;
     --region)        PACK_ARG_REGION="$2";         shift 2 ;;
-    *) [[ $# -gt 1 ]] && [[ "$2" != --* ]] && shift 2 || shift ;;
+    *)
+      # Unknown args: warn but don't fail (may be passed by bootstrap for other packs)
+      if [[ $# -gt 1 ]] && [[ "$2" != --* ]]; then
+        shift 2
+      else
+        shift
+      fi
+      ;;
   esac
 done
 
@@ -239,8 +246,15 @@ step "Ensuring AWS_REGION exported in .bashrc"
 
 BASHRC="${HOME}/.bashrc"
 # Sentinel-replace: remove stale block before writing fresh one (handles --region changes on re-run)
+# Safety: only sed-delete if exactly 2 sentinel lines exist (complete block); single sentinel = corrupted, skip
 if grep -qF "${AWS_REGION_SENTINEL}" "${BASHRC}" 2>/dev/null; then
-  sed -i "/${AWS_REGION_SENTINEL//\//\\/}/,/${AWS_REGION_SENTINEL//\//\\/}/d" "${BASHRC}"
+  _sentinel_count=$(grep -cF "${AWS_REGION_SENTINEL}" "${BASHRC}" 2>/dev/null || true)
+  if [[ "${_sentinel_count}" -ge 2 ]]; then
+    sed -i "/${AWS_REGION_SENTINEL//\//\\/}/,/${AWS_REGION_SENTINEL//\//\\/}/d" "${BASHRC}"
+  else
+    warn "Incomplete AWS_REGION sentinel in ${BASHRC} (${_sentinel_count} line) — removing single line"
+    sed -i "/${AWS_REGION_SENTINEL//\//\\/}/d" "${BASHRC}"
+  fi
 fi
 printf '\n%s\n# Troika: Codex CLI reads AWS_REGION (not only AWS_DEFAULT_REGION)\nexport AWS_REGION="%s"\n%s\n' \
   "${AWS_REGION_SENTINEL}" "${REGION}" "${AWS_REGION_SENTINEL}" >> "${BASHRC}"
@@ -359,10 +373,16 @@ step "Appending auto-launch block to .bashrc"
 BASHRC="${HOME}/.bashrc"
 
 # Sentinel-replace: remove stale block before writing fresh one (handles re-runs with different --primary)
+# Safety: only sed range-delete if exactly 2 sentinel lines exist (complete block); single = corrupted
 if grep -qF "${AUTOLAUNCH_SENTINEL}" "${BASHRC}" 2>/dev/null; then
-  # Strip old block (inclusive of sentinel lines) using sed
-  sed -i "/${AUTOLAUNCH_SENTINEL//\//\\/}/,/${AUTOLAUNCH_SENTINEL//\//\\/}/d" "${BASHRC}"
-  log "Removed stale auto-launch block from ${BASHRC} (will rewrite)"
+  _sentinel_count=$(grep -cF "${AUTOLAUNCH_SENTINEL}" "${BASHRC}" 2>/dev/null || true)
+  if [[ "${_sentinel_count}" -ge 2 ]]; then
+    sed -i "/${AUTOLAUNCH_SENTINEL//\//\\/}/,/${AUTOLAUNCH_SENTINEL//\//\\/}/d" "${BASHRC}"
+    log "Removed stale auto-launch block from ${BASHRC} (will rewrite)"
+  else
+    warn "Incomplete autolaunch sentinel in ${BASHRC} (${_sentinel_count} line) — removing single line"
+    sed -i "/${AUTOLAUNCH_SENTINEL//\//\\/}/d" "${BASHRC}"
+  fi
 fi
 
 # Write fresh autolaunch block
