@@ -206,9 +206,12 @@ work, fall back to `aws bedrock list-foundation-models` grep for `openai.` ids
 ## 12a. Owner decision (2026-07-12): selectable first horse
 
 The first horse (the OpenClaw-family agent) is **selectable**, not hardcoded:
-new param `primary` (openclaw | hermes | roundhouse; default openclaw).
-Full title: "OpenClaw Troika — mixture of harnesses: OpenClaw/Hermes/Roundhouse
+new param `primary` (openclaw | hermes; default openclaw).
+Full title: "OpenClaw Troika — mixture of harnesses: OpenClaw/Hermes
 + Claude Code + Codex CLI, all via Bedrock".
+Owner decision 2026-07-12 12:25: roundhouse is EXCLUDED from the primary
+options for now (its Telegram-credential requirement was a review blocker);
+may be added later — see point 9.
 
 Design implications (implement in Phase 3 alongside installer wiring) —
 amended after troika review 2026-07-12 (Claude Opus + Codex, arbitrated):
@@ -224,7 +227,7 @@ amended after troika review 2026-07-12 (Claude Opus + Codex, arbitrated):
    VALID_DRIVERS, the autolaunch `case`, and the `agents` helper status loop.
 3. **Launch commands**: source of truth is `PACK_TUI_COMMAND` in each pack's
    resources/shell-profile.sh (openclaw→`openclaw tui`, hermes→`hermes`,
-   roundhouse→`roundhouse tui`, claude-code→`claude`) — NOT provides.commands.
+   claude-code→`claude`) — NOT provides.commands.
    Caveat: bare `hermes` may be one-shot CLI, not a REPL — live-verify in Phase 2/3;
    if not interactive, daily-driver=hermes degrades to `none` + banner hint.
 4. **agents helper** status/driver must reflect the selected primary (see point 2).
@@ -235,20 +238,19 @@ amended after troika review 2026-07-12 (Claude Opus + Codex, arbitrated):
    inert (only checked for presence by test-pack-contracts) — keep static but
    document; install.sh must only reference/enable openclaw-gateway when
    primary=openclaw. `agents` helper is the real runtime health surface.
-7. **CFN**: add `Primary` param (AllowedValues openclaw|hermes|roundhouse,
+7. **CFN**: add `Primary` param (AllowedValues openclaw|hermes,
    default openclaw) + UserData passthrough, TOGETHER with the §12.6 batch
    (troika in PackName AllowedValues, DailyDriver, CodexModel — none exist yet;
    UserData currently passes only `--model`, template.yaml:1133).
 8. **Installer question**: "Which OpenClaw-family agent is your first horse?"
    (gum choose) + `--primary` flag; review summary line.
-9. **⚠ primary=roundhouse needs Telegram creds** (was a review BLOCKER):
-   roundhouse install.sh hard-fails without telegram_bot_token_secret +
-   telegram_user (roundhouse/install.sh:97-129), and the installer only collects
-   them when PACK_NAME==roundhouse (install.sh:~2815). Phase 3 MUST extend that
-   prompt condition to `troika && primary==roundhouse` and plumb the params
-   through CFN/bootstrap to the dep. Also note roundhouse is primarily a Telegram
-   daemon (systemd service); its TUI exists (`roundhouse tui`) so autolaunch is
-   still valid.
+9. **Roundhouse deferred** (owner decision, resolves the review BLOCKER):
+   roundhouse is NOT a primary option for now. Reason: its install hard-fails
+   without telegram_bot_token_secret + telegram_user (roundhouse/install.sh:97-129),
+   and the installer only collects those when PACK_NAME==roundhouse
+   (install.sh:~2815). IF added later: extend that prompt condition to
+   `troika && primary==roundhouse`, plumb params through CFN/bootstrap to the
+   dep, and use `roundhouse tui` (PACK_TUI_COMMAND) for autolaunch.
 10. **Shell profile**: troika banner/aliases (loki, lt) are openclaw-flavored —
     make primary-aware in Phase 4 (autolaunch/profile phase).
 11. Cleanup (unrelated, low-pri): hermes manifest says `deps: []` while registry
