@@ -203,6 +203,37 @@ work, fall back to `aws bedrock list-foundation-models` grep for `openai.` ids
 5. Preflight Codex-model probe amendment.
 6. Docs + full test matrix + scratch-account end-to-end install.
 
+## 12a. Owner decision (2026-07-12): selectable first horse
+
+The first horse (the OpenClaw-family agent) is **selectable**, not hardcoded:
+new param `primary` (openclaw | hermes | roundhouse; default openclaw).
+Full title: "OpenClaw Troika — mixture of harnesses: OpenClaw/Hermes/Roundhouse
++ Claude Code + Codex CLI, all via Bedrock".
+
+Design implications (implement in Phase 3 alongside installer wiring):
+1. **Dynamic dep resolution**: registry deps stay `bedrockify, openclaw,
+   claude-code, codex-cli` as the DEFAULT, but bootstrap must substitute the
+   `openclaw` dep with the selected primary pack. `registry_get_deps` (bootstrap.sh:315)
+   is a static awk over registry.yaml — add a troika-specific substitution after
+   dep resolution (same place §12.1 adds `--daily-driver`/`--codex-model` parsing;
+   add `--primary` there too, plus PACK_CONFIG key).
+2. **daily-driver values** widen to: openclaw | hermes | roundhouse | claude-code |
+   codex-cli | none — but only the installed primary + claude-code + codex-cli are
+   valid on a given box; install.sh validates against the actual primary.
+3. **Autolaunch case** needs hermes/roundhouse launch commands (check each pack's
+   provides.commands for the TUI entrypoint).
+4. **agents helper** status/driver must reflect the selected primary.
+5. **Sizing**: openclaw needs t4g.xlarge; hermes/roundhouse min t4g.medium. Keep
+   troika at t4g.xlarge regardless (builder-only profile already implies it).
+6. **health_check / provides.commands** are static in the manifest — keep the
+   openclaw defaults; install.sh writes the real health check or tolerates the
+   selected primary (decide in Phase 3; simplest: health_check uses `agents`
+   helper which knows the primary).
+7. **CFN**: add `Primary` param (AllowedValues openclaw|hermes|roundhouse,
+   default openclaw) + UserData passthrough, alongside DailyDriver/CodexModel.
+8. **Installer question**: "Which OpenClaw-family agent is your first horse?"
+   (gum choose) + `--primary` flag; review summary line.
+
 ## 12. Review amendments (Codex/GPT-5.5, verified against code)
 
 Verdict: required amendments before implementation. All folded into the plan above
