@@ -10,15 +10,16 @@ description: "Anthropic's coding agent with native Bedrock support."
 ## When to use
 
 - Want **Claude Code** exactly as Anthropic ships it, running on Bedrock
-- Want the agent to auto-update (Anthropic releases frequently)
+- Want a **pinned, tested CLI version** (override by re-running the pack installer on the instance: `packs/claude-code/install.sh --version latest`)
 - Need tight Claude integration with an existing Bedrock account
 - One-shot or interactive use; no long-running service
 
 ## What the pack installs
 
-- Claude Code CLI (via Anthropic's installer)
-- Bedrock-mode env vars: `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, Bedrock region, etc.
-- Shell profile that adds `claude` to PATH and sets auto-update behavior
+- Claude Code CLI (via Anthropic's installer, pinned version)
+- Bedrock config in `~/.claude/settings.json` (`env` block — works in headless/non-login contexts) plus shell profile env vars: `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, Bedrock region
+- AWS plugins (`aws-core`, `aws-agents`) from the official marketplace — `aws-core` bundles the AWS MCP proxy
+- Shell profile that adds `claude` to PATH
 - Health check: `claude --version`
 
 No systemd service — this is a pure CLI pack. You invoke `claude` directly when you SSM in.

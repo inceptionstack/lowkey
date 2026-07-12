@@ -79,7 +79,7 @@ Run `curl -sfL install.lowkey.run | bash` — the installer walks you through **
 | Pack | Description | Instance | Data Volume |
 |------|-------------|----------|-------------|
 | **OpenClaw** (default) | Stateful AI agent with 24/7 gateway, persistent memory, Telegram/Discord/Slack | t4g.xlarge recommended | 80GB |
-| **Claude Code** | Anthropic's coding agent — native Bedrock support, auto-updates, full tool access | t4g.large recommended | None needed (set to 0) |
+| **Claude Code** | Anthropic's coding agent — native Bedrock support, pinned CLI version, AWS plugins + MCP, full tool access | t4g.large recommended | None needed (set to 0) |
 | **Hermes** *(experimental)* | NousResearch CLI agent — lighter, terminal-focused, self-improving skills | t4g.medium sufficient | None needed (set to 0) |
 | **Pi** *(experimental)* | Minimal terminal coding harness — read, write, edit, bash tools | t4g.medium sufficient | None needed (set to 0) |
 | **IronClaw** *(experimental)* | Rust-based AI agent by NEAR AI — static binary, fast startup | t4g.medium sufficient | None needed (set to 0) |
@@ -196,7 +196,7 @@ Lowkey uses a **pack-based architecture** for deploying different AI agent runti
 |------|------|-------------|
 | `bedrockify` | Base (auto-installed) | OpenAI-compatible proxy for Amazon Bedrock. Runs as a systemd daemon on port 8090. Most agent packs depend on this. |
 | `openclaw` | Agent | Full stateful AI agent with 24/7 gateway, persistent memory, multi-channel support (Telegram, Discord, Slack). Includes Claude Code. |
-| `claude-code` | Agent | Anthropic's Claude Code CLI. Native Bedrock support (no bedrockify needed), auto-updates, full tool permissions. |
+| `claude-code` | Agent | Anthropic's Claude Code CLI. Native Bedrock support (no bedrockify needed), pinned version (override on the box: `packs/claude-code/install.sh --version latest`), AWS plugins + MCP proxy, full tool permissions. |
 | `hermes` | Agent *(experimental)* | NousResearch Hermes CLI agent. Self-improving skills, learning loop, lightweight. Uses bedrockify for model access. |
 | `pi` | Agent *(experimental)* | Pi Coding Agent. Minimal terminal coding harness with read, write, edit, bash tools. Pure Node.js. |
 | `ironclaw` | Agent *(experimental)* | IronClaw by NEAR AI. Rust-based agent with shell/file tools, MCP support. Single static binary. |

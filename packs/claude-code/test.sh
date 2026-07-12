@@ -203,6 +203,7 @@ generate_bedrock_profile() {
 export CLAUDE_CODE_USE_BEDROCK=1
 export AWS_REGION="${REGION}"
 export ANTHROPIC_MODEL="${MODEL}"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="${MODEL}"
 export ANTHROPIC_DEFAULT_HAIKU_MODEL="${HAIKU_MODEL}"
 EOF
 }
@@ -225,6 +226,12 @@ if printf '%s' "${PROFILE_OUT}" | grep -q 'ANTHROPIC_MODEL="us.anthropic.claude-
   pass "profile.d: sets ANTHROPIC_MODEL correctly"
 else
   fail "profile.d: missing or wrong ANTHROPIC_MODEL"
+fi
+
+if printf '%s' "${PROFILE_OUT}" | grep -q 'ANTHROPIC_DEFAULT_SONNET_MODEL="us.anthropic.claude-sonnet-4-6"'; then
+  pass "profile.d: sets ANTHROPIC_DEFAULT_SONNET_MODEL (alias pin)"
+else
+  fail "profile.d: missing ANTHROPIC_DEFAULT_SONNET_MODEL"
 fi
 
 if printf '%s' "${PROFILE_OUT}" | grep -q 'ANTHROPIC_DEFAULT_HAIKU_MODEL='; then
@@ -278,10 +285,12 @@ if command -v python3 &>/dev/null; then
   if python3 -c "
 import json
 d = json.load(open('${TMP_SETTINGS}'))
+assert d.get('\$schema') == 'https://json.schemastore.org/claude-code-settings.json', 'schema ref missing'
 env = d.get('env', {})
 assert env.get('CLAUDE_CODE_USE_BEDROCK') == '1'
 assert env.get('AWS_REGION') == 'us-east-1'
 assert env.get('ANTHROPIC_MODEL') == 'us.anthropic.claude-sonnet-4-6'
+assert env.get('ANTHROPIC_DEFAULT_SONNET_MODEL') == 'us.anthropic.claude-sonnet-4-6'
 assert env.get('ANTHROPIC_DEFAULT_HAIKU_MODEL')
 allow = d.get('permissions', {}).get('allow', [])
 for r in ['Bash(*)', 'Read(*)', 'Write(*)', 'Edit(*)']:
@@ -318,6 +327,85 @@ assert 'Bash(rm*)' in d['permissions']['deny'], 'user deny rule clobbered'
     fail "settings merge: clobbers user customizations"
   fi
 
+  # Corrupt file: preserved as timestamped .corrupt.*.bak, merge proceeds fresh
+  echo '{broken json' > "${TMP_SETTINGS}"
+  SETTINGS_FILE="${TMP_SETTINGS}" CC_REGION="us-east-1" \
+    CC_MODEL="m1" CC_HAIKU_MODEL="m2" python3 -c "${MERGE_PY}" 2>/dev/null || true
+  CORRUPT_BAKS=( "${TMP_SETTINGS}".corrupt.*.bak )
+  if [[ -f "${CORRUPT_BAKS[0]}" ]] && python3 -c "
+import json
+d = json.load(open('${TMP_SETTINGS}'))
+assert d['env']['CLAUDE_CODE_USE_BEDROCK'] == '1'
+" 2>/dev/null; then
+    pass "settings merge: corrupt file preserved as timestamped .corrupt.*.bak, fresh file written"
+  else
+    fail "settings merge: corrupt file handling broken"
+  fi
+  # Invalid-shape file (valid JSON, wrong types): backed up, merge proceeds fresh
+  echo '{"env": null, "permissions": []}' > "${TMP_SETTINGS}"
+  SETTINGS_FILE="${TMP_SETTINGS}" CC_REGION="us-east-1" \
+    CC_MODEL="m1" CC_HAIKU_MODEL="m2" python3 -c "${MERGE_PY}" 2>/dev/null || true
+  SHAPE_BAKS=( "${TMP_SETTINGS}".corrupt.*.bak )
+  if [[ -f "${SHAPE_BAKS[0]}" ]] && python3 -c "
+import json
+d = json.load(open('${TMP_SETTINGS}'))
+assert d['env']['CLAUDE_CODE_USE_BEDROCK'] == '1'
+assert isinstance(d['permissions']['allow'], list)
+" 2>/dev/null; then
+    pass "settings merge: invalid-shape file backed up, fresh file written"
+  else
+    fail "settings merge: invalid-shape handling broken (TypeError risk under set -e)"
+  fi
+  rm -f "${TMP_SETTINGS}".corrupt.*.bak
+
+  # Falsy top-level JSON (null / [] / \"\" / 0 / false): must recover, not crash
+  FALSY_OK=1
+  for payload in 'null' '[]' '\"\"' '0' 'false'; do
+    printf '%s' "${payload}" > "${TMP_SETTINGS}"
+    if ! SETTINGS_FILE="${TMP_SETTINGS}" CC_REGION="us-east-1" \
+        CC_MODEL="m1" CC_HAIKU_MODEL="m2" python3 -c "${MERGE_PY}" 2>/dev/null; then
+      FALSY_OK=0
+    fi
+    python3 -c "
+import json
+d = json.load(open('${TMP_SETTINGS}'))
+assert d['env']['CLAUDE_CODE_USE_BEDROCK'] == '1'
+" 2>/dev/null || FALSY_OK=0
+    rm -f "${TMP_SETTINGS}".corrupt.*.bak
+  done
+  if [[ "${FALSY_OK}" -eq 1 ]]; then
+    pass "settings merge: falsy top-level JSON (null/[]/''/0/false) recovers cleanly"
+  else
+    fail "settings merge: falsy top-level JSON crashes the merge (aborts install)"
+  fi
+
+  # Schema-invalid leaf values: scalars coerced to strings, non-scalars dropped
+  echo '{"env":{"NUM":1,"FLAG":true,"BAD":{"x":1},"OK":"s"},"permissions":{"allow":["Good(*)",42]}}' > "${TMP_SETTINGS}"
+  SETTINGS_FILE="${TMP_SETTINGS}" CC_REGION="us-east-1" \
+    CC_MODEL="m1" CC_HAIKU_MODEL="m2" python3 -c "${MERGE_PY}" 2>/dev/null || true
+  if python3 -c "
+import json
+d = json.load(open('${TMP_SETTINGS}'))
+assert d['env']['NUM'] == '1'
+assert d['env']['FLAG'] == 'true'
+assert 'BAD' not in d['env']
+assert d['env']['OK'] == 's'
+assert 'Good(*)' in d['permissions']['allow']
+assert 42 not in d['permissions']['allow']
+assert all(isinstance(x, str) for x in d['permissions']['allow'])
+" 2>/dev/null; then
+    pass "settings merge: schema-invalid leaves sanitized (env coerced, non-strings dropped)"
+  else
+    fail "settings merge: schema-invalid leaves survive (CC rejects file wholesale)"
+  fi
+
+  # Temp file is created 0600 (may hold user secrets)
+  if grep -q 'os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600' "${INSTALL}"; then
+    pass "settings merge: temp file created with 0600 permissions"
+  else
+    fail "settings merge: temp file not created with restrictive permissions"
+  fi
+
   rm -f "${TMP_SETTINGS}"
 else
   skip "settings merge tests: python3 not available"
@@ -351,17 +439,32 @@ else
   fail "install.sh missing plugin idempotency guard"
 fi
 
-# AWS MCP proxy wiring
-if grep -q 'claude mcp add' "${INSTALL}" && grep -q 'MCP_PROXY_VERSION' "${INSTALL}"; then
-  pass "install.sh wires AWS MCP proxy via 'claude mcp add' (pinned version)"
+# Marketplace bootstrap: fresh installs have NO marketplaces — must add first
+if grep -q 'claude plugin marketplace add anthropics/claude-plugins-official' "${INSTALL}"; then
+  pass "install.sh adds official marketplace before installing plugins"
 else
-  fail "install.sh missing AWS MCP proxy wiring"
+  fail "install.sh missing 'marketplace add' — plugin installs fail on fresh boxes"
 fi
 
-# Done marker is the last step (after plugins/skills/MCP)
+# NO manual MCP add: aws-core plugin bundles the proxy with correct endpoint;
+# a bare 'claude mcp add ... mcp-proxy-for-aws' creates a broken server.
+if grep -qE '^[^#]*claude mcp add' "${INSTALL}"; then
+  fail "install.sh must NOT 'claude mcp add' the AWS proxy (plugin bundles it correctly)"
+else
+  pass "install.sh does not manually add AWS MCP server (plugin-bundled)"
+fi
+
+# uv is ensured for the plugin-bundled MCP server
+if grep -q 'astral.sh/uv/install.sh' "${INSTALL}"; then
+  pass "install.sh ensures uv is available for plugin MCP server"
+else
+  fail "install.sh missing uv bootstrap (plugin MCP server needs uvx)"
+fi
+
+# Done marker is the last step (after plugins/skills/uv)
 LAST_MARKER_LINE="$(grep -n 'write_done_marker' "${INSTALL}" | tail -1 | cut -d: -f1)"
-LAST_MCP_LINE="$(grep -n 'claude mcp add' "${INSTALL}" | tail -1 | cut -d: -f1)"
-if [[ -n "${LAST_MARKER_LINE}" && -n "${LAST_MCP_LINE}" && "${LAST_MARKER_LINE}" -gt "${LAST_MCP_LINE}" ]]; then
+LAST_UV_LINE="$(grep -n 'astral.sh/uv' "${INSTALL}" | tail -1 | cut -d: -f1)"
+if [[ -n "${LAST_MARKER_LINE}" && -n "${LAST_UV_LINE}" && "${LAST_MARKER_LINE}" -gt "${LAST_UV_LINE}" ]]; then
   pass "write_done_marker runs after all install steps"
 else
   fail "write_done_marker should be the final step"

@@ -39,6 +39,8 @@ Install Claude Code and configure it to use AWS Bedrock natively.
 Options:
   --region          AWS region for Bedrock                         (default: us-east-1)
   --model           Bedrock model ID (ANTHROPIC_MODEL)             (default: us.anthropic.claude-sonnet-4-6)
+                    Note: also pins the 'sonnet' alias (ANTHROPIC_DEFAULT_SONNET_MODEL) —
+                    pass a Sonnet-family ID here; use --haiku-model for the fast path.
   --haiku-model     Bedrock model ID for Haiku fast-path           (default: us.anthropic.claude-haiku-4-5-20251001-v1:0)
   --version         Claude Code version to install: X.Y.Z|stable|latest (default: pinned)
   --skip-smoke-test Skip the live Bedrock invocation check
@@ -140,6 +142,7 @@ export PATH="\${HOME}/.local/bin:\${PATH}"
 export CLAUDE_CODE_USE_BEDROCK=1
 export AWS_REGION="${REGION}"
 export ANTHROPIC_MODEL="${MODEL}"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="${MODEL}"
 export ANTHROPIC_DEFAULT_HAIKU_MODEL="${HAIKU_MODEL}"
 EOF
 
@@ -161,20 +164,79 @@ mkdir -p "${HOME}/.claude"
 SETTINGS_FILE="${HOME}/.claude/settings.json" \
 CC_REGION="${REGION}" CC_MODEL="${MODEL}" CC_HAIKU_MODEL="${HAIKU_MODEL}" \
 python3 <<'PYEOF'
-import json, os
+import json, os, sys
 
 path = os.environ["SETTINGS_FILE"]
-try:
-    with open(path) as f:
-        settings = json.load(f)
-except (FileNotFoundError, json.JSONDecodeError):
+settings = {}
+if os.path.exists(path):
+    try:
+        with open(path) as f:
+            settings = json.load(f)
+    except (ValueError, OSError) as err:
+        # Never silently discard a user's file: preserve it, warn, start fresh.
+        backup = "%s.corrupt.%s.%s.bak" % (path, __import__("time").strftime("%Y%m%d-%H%M%S"), os.getpid())
+        os.rename(path, backup)
+        sys.stderr.write("WARN: settings.json unreadable (%s); saved as %s\n" % (err, backup))
+        settings = {}
+
+# Shape validation: valid JSON with wrong shapes (env: null, permissions: [],
+# allow: "...") would crash the merge below. Treat like a corrupt file: back up
+# and start fresh (CC rejects invalid settings files wholesale anyway).
+def _bad_shape(s):
+    if not isinstance(s, dict):
+        return True
+    if "env" in s and not isinstance(s["env"], dict):
+        return True
+    if "permissions" in s:
+        p = s["permissions"]
+        if not isinstance(p, dict):
+            return True
+        if "allow" in p and not isinstance(p["allow"], list):
+            return True
+        if "deny" in p and not isinstance(p["deny"], list):
+            return True
+    return False
+
+if _bad_shape(settings):
+    backup = "%s.corrupt.%s.%s.bak" % (path, __import__("time").strftime("%Y%m%d-%H%M%S"), os.getpid())
+    os.rename(path, backup)
+    sys.stderr.write("WARN: settings.json has invalid structure; saved as %s\n" % backup)
     settings = {}
 
-# Bedrock env (pack-managed keys only; user keys preserved)
+# Leaf sanitation: CC rejects settings files wholesale on schema violations.
+# env values must be strings (coerce scalars, drop the rest); permission
+# entries must be strings (drop the rest). Warn on anything modified.
+if isinstance(settings.get("env"), dict):
+    for k in list(settings["env"].keys()):
+        v = settings["env"][k]
+        if isinstance(v, str):
+            continue
+        if isinstance(v, (int, float, bool)):
+            settings["env"][k] = str(v).lower() if isinstance(v, bool) else str(v)
+            sys.stderr.write("WARN: coerced env.%s to string\n" % k)
+        else:
+            del settings["env"][k]
+            sys.stderr.write("WARN: dropped non-scalar env.%s\n" % k)
+if isinstance(settings.get("permissions"), dict):
+    for key in ("allow", "deny"):
+        vals = settings["permissions"].get(key)
+        if isinstance(vals, list):
+            kept = [x for x in vals if isinstance(x, str)]
+            if len(kept) != len(vals):
+                sys.stderr.write("WARN: dropped non-string permissions.%s entries\n" % key)
+                settings["permissions"][key] = kept
+
+# Schema reference enables editor validation; CC rejects invalid files wholesale.
+settings.setdefault("$schema", "https://json.schemastore.org/claude-code-settings.json")
+
+# Bedrock env (pack-managed keys only; user keys preserved).
+# DEFAULT_* alias pins are official multi-user guidance -- without them the
+# sonnet/haiku aliases drift to CC's built-in Bedrock defaults.
 env = settings.setdefault("env", {})
 env["CLAUDE_CODE_USE_BEDROCK"] = "1"
 env["AWS_REGION"] = os.environ["CC_REGION"]
 env["ANTHROPIC_MODEL"] = os.environ["CC_MODEL"]
+env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = os.environ["CC_MODEL"]
 env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = os.environ["CC_HAIKU_MODEL"]
 
 # Full tool permissions (union with existing allow list)
@@ -185,9 +247,12 @@ for rule in ["Bash(*)", "Read(*)", "Write(*)", "Edit(*)"]:
         allow.append(rule)
 perms.setdefault("deny", [])
 
-with open(path, "w") as f:
+tmp = path + ".tmp"
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
     json.dump(settings, f, indent=2)
     f.write("\n")
+os.replace(tmp, path)
 PYEOF
 
 chmod 600 "${HOME}/.claude/settings.json"
@@ -205,7 +270,10 @@ ok "claude --version: ${CLAUDE_VER}"
 step "Installing AWS Agent Toolkit plugins"
 if command -v claude &>/dev/null; then
   if claude plugin --help &>/dev/null; then
-    # First-class plugin CLI (Claude Code >= 2.x)
+    # First-class plugin CLI (Claude Code >= 2.x).
+    # Fresh installs have NO marketplaces configured (verified live on 2.1.197):
+    # 'marketplace update' alone fails until the official one is added.
+    claude plugin marketplace add anthropics/claude-plugins-official 2>/dev/null || true
     claude plugin marketplace update claude-plugins-official 2>/dev/null || true
     for plugin in aws-core aws-agents; do
       if claude plugin list 2>/dev/null | grep -q "${plugin}"; then
@@ -243,24 +311,21 @@ else
 fi
 install_aws_toolkit_skills "${PACK_SKILLS_DIR}"
 
-# ── AWS MCP proxy (parity with kiro-cli) ─────────────────────────────────────
-# Wires mcp-proxy-for-aws into Claude Code at user scope. Best-effort.
-step "Configuring AWS MCP proxy"
+# ── uv/uvx for plugin-bundled MCP servers ────────────────────────────────────
+# The aws-core plugin bundles the AWS MCP proxy with the correct endpoint config
+# (verified live: a manual 'claude mcp add' of bare mcp-proxy-for-aws produces a
+# BROKEN server with no endpoint URL — do not add it manually). The plugin's MCP
+# server launches via uvx, so uv just needs to be on PATH. Best-effort.
+step "Ensuring uv is available (for plugin-bundled AWS MCP proxy)"
 if ! command -v uv &>/dev/null && ! command -v uvx &>/dev/null; then
-  log "Installing uv (needed for mcp-proxy-for-aws)..."
+  log "Installing uv (needed by aws-core plugin's MCP server)..."
   curl -LsSf https://astral.sh/uv/install.sh | sh || warn "uv install failed (non-fatal)"
   export PATH="${HOME}/.cargo/bin:${HOME}/.local/bin:${PATH}"
 fi
-if command -v uvx &>/dev/null || command -v uv &>/dev/null; then
-  if claude mcp list 2>/dev/null | grep -q "^aws:"; then
-    ok "MCP server 'aws' already configured — skipping"
-  else
-    claude mcp add --scope user aws -- uvx "mcp-proxy-for-aws@${MCP_PROXY_VERSION}" \
-      && ok "MCP server 'aws' added (mcp-proxy-for-aws@${MCP_PROXY_VERSION}, user scope)" \
-      || warn "claude mcp add failed (non-fatal)"
-  fi
+if command -v uvx &>/dev/null; then
+  ok "uvx available — aws-core plugin MCP server can launch"
 else
-  warn "uv/uvx unavailable — skipping AWS MCP proxy (non-fatal)"
+  warn "uvx unavailable — aws-core plugin MCP server will not connect (non-fatal)"
 fi
 
 # ── Bedrock smoke test ───────────────────────────────────────────────────────
@@ -268,9 +333,13 @@ if [[ "${SKIP_SMOKE_TEST}" -eq 1 ]]; then
   log "Skipping Bedrock smoke test (--skip-smoke-test)"
 else
   step "Bedrock smoke test"
-  if CLAUDE_CODE_USE_BEDROCK=1 AWS_REGION="${REGION}" ANTHROPIC_MODEL="${MODEL}" \
-      timeout 90 claude -p "Reply with exactly: ok" --model "${MODEL}" 2>/dev/null | grep -qi "ok"; then
-    ok "Bedrock smoke test passed (${MODEL} via ${REGION})"
+  # Strip the profile env vars for this one invocation: the test must pass purely
+  # from the settings.json env block (proves headless/non-login-shell contexts).
+  # Without this, the 'source PROFILE_TARGET' above would mask a broken merge.
+  if timeout 90 env -u CLAUDE_CODE_USE_BEDROCK -u AWS_REGION -u AWS_DEFAULT_REGION \
+      -u ANTHROPIC_MODEL -u ANTHROPIC_DEFAULT_SONNET_MODEL -u ANTHROPIC_DEFAULT_HAIKU_MODEL \
+      claude -p "Reply with exactly: ok" 2>/dev/null | grep -qi "ok"; then
+    ok "Bedrock smoke test passed via settings.json env (${MODEL} via ${REGION})"
   else
     warn "Bedrock smoke test failed — check IAM role Bedrock permissions and model access (non-fatal)"
   fi
