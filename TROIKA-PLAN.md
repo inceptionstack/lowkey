@@ -207,8 +207,9 @@ work, fall back to `aws bedrock list-foundation-models` grep for `openai.` ids
 
 The first horse (the OpenClaw-family agent) is **selectable**, not hardcoded:
 new param `primary` (openclaw | hermes; default openclaw).
-Full title: "OpenClaw Troika — mixture of harnesses: OpenClaw/Hermes
-+ Claude Code + Codex CLI, all via Bedrock".
+Full title: "Troika — mixture of harnesses: OpenClaw/Hermes
++ Claude Code + Codex CLI, all via Bedrock". No "OpenClaw" brand prefix on the
+pack name/title — the first horse is selectable, we don't commit to it.
 Owner decision 2026-07-12 12:25: roundhouse is EXCLUDED from the primary
 options for now (its Telegram-credential requirement was a review blocker);
 may be added later — see point 9.
@@ -255,6 +256,32 @@ amended after troika review 2026-07-12 (Claude Opus + Codex, arbitrated):
     make primary-aware in Phase 4 (autolaunch/profile phase).
 11. Cleanup (unrelated, low-pri): hermes manifest says `deps: []` while registry
     gives it bedrockify — metadata drift, masked by troika's explicit dep.
+
+## 12b. Code quality requirements (owner, 2026-07-12)
+
+All troika code (pack install.sh, agents helper, installer/bootstrap/CFN changes)
+must be clean, DRY, and maintainable. Concretely:
+
+1. **Single source of truth for agent metadata.** The agent→launch-command,
+   agent→binary, agent→display-name mappings must live in ONE place (e.g. an
+   associative array or a small lookup function in packs/troika/install.sh that
+   reads PACK_TUI_COMMAND from each pack's shell-profile.sh). The autolaunch
+   case, VALID_DRIVERS, and the agents helper must all derive from it — no
+   parallel hardcoded lists (the §12a review found 3 already; collapse them).
+2. **No copy-paste between installer/bootstrap/pack.** Param plumbing for
+   primary/daily-driver/codex-model follows the ONE existing pattern
+   (PACK_CONFIG); extend it, don't invent a second mechanism.
+3. **Functions over repetition** in install.sh: config-file writes, sentinel
+   block management, and validation should each be one helper used everywhere.
+4. **Shellcheck-clean at -S warning** for all new/touched shell files — no
+   new suppressions without a comment explaining why.
+5. **Tests mirror structure**: when a lookup table gains an agent, exactly one
+   test fixture should need updating. If adding hermes support requires edits
+   in >2 code sites (lookup + tests), the design is wrong — refactor first.
+6. **Idempotency by construction**: every write to shared files (.bashrc,
+   config.toml) goes through the sentinel/merge helpers, never raw appends.
+
+Reviewers in troika reviews should flag violations of this section as MAJOR.
 
 ## 12. Review amendments (Codex/GPT-5.5, verified against code)
 

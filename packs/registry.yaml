@@ -101,7 +101,7 @@ packs:
 
   troika:
     type: agent
-    description: "Troika — mixture of harnesses: OpenClaw + Claude Code + Codex CLI on one instance, all via Bedrock"
+    description: "Troika — mixture of harnesses: OpenClaw/Hermes + Claude Code + Codex CLI on one instance, all via Bedrock"
     deps:
       - bedrockify
       - openclaw
