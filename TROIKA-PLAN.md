@@ -210,29 +210,49 @@ new param `primary` (openclaw | hermes | roundhouse; default openclaw).
 Full title: "OpenClaw Troika — mixture of harnesses: OpenClaw/Hermes/Roundhouse
 + Claude Code + Codex CLI, all via Bedrock".
 
-Design implications (implement in Phase 3 alongside installer wiring):
+Design implications (implement in Phase 3 alongside installer wiring) —
+amended after troika review 2026-07-12 (Claude Opus + Codex, arbitrated):
 1. **Dynamic dep resolution**: registry deps stay `bedrockify, openclaw,
-   claude-code, codex-cli` as the DEFAULT, but bootstrap must substitute the
-   `openclaw` dep with the selected primary pack. `registry_get_deps` (bootstrap.sh:315)
-   is a static awk over registry.yaml — add a troika-specific substitution after
-   dep resolution (same place §12.1 adds `--daily-driver`/`--codex-model` parsing;
-   add `--primary` there too, plus PACK_CONFIG key).
-2. **daily-driver values** widen to: openclaw | hermes | roundhouse | claude-code |
-   codex-cli | none — but only the installed primary + claude-code + codex-cli are
-   valid on a given box; install.sh validates against the actual primary.
-3. **Autolaunch case** needs hermes/roundhouse launch commands (check each pack's
-   provides.commands for the TUI entrypoint).
-4. **agents helper** status/driver must reflect the selected primary.
-5. **Sizing**: openclaw needs t4g.xlarge; hermes/roundhouse min t4g.medium. Keep
-   troika at t4g.xlarge regardless (builder-only profile already implies it).
-6. **health_check / provides.commands** are static in the manifest — keep the
-   openclaw defaults; install.sh writes the real health check or tolerates the
-   selected primary (decide in Phase 3; simplest: health_check uses `agents`
-   helper which knows the primary).
+   claude-code, codex-cli` as the DEFAULT; bootstrap substitutes the `openclaw`
+   dep with the selected primary. CRITICAL: substitution must apply to BOTH dep
+   reads — step counting (bootstrap.sh:343) AND install dispatch (bootstrap.sh:614)
+   — and no-op cleanly when primary=openclaw. Add `--primary` parsing + PACK_CONFIG
+   key (bootstrap.sh:242) alongside §12.1's `--daily-driver`/`--codex-model`.
+2. **daily-driver values**: valid set on a given box = {installed primary,
+   claude-code, codex-cli, none}; DEFAULT must track the selected primary (not
+   hardcoded openclaw). THREE hardcoded sites in packs/troika/install.sh to widen:
+   VALID_DRIVERS, the autolaunch `case`, and the `agents` helper status loop.
+3. **Launch commands**: source of truth is `PACK_TUI_COMMAND` in each pack's
+   resources/shell-profile.sh (openclaw→`openclaw tui`, hermes→`hermes`,
+   roundhouse→`roundhouse tui`, claude-code→`claude`) — NOT provides.commands.
+   Caveat: bare `hermes` may be one-shot CLI, not a REPL — live-verify in Phase 2/3;
+   if not interactive, daily-driver=hermes degrades to `none` + banner hint.
+4. **agents helper** status/driver must reflect the selected primary (see point 2).
+5. **Sizing**: keep troika at t4g.xlarge regardless of primary (builder-only
+   already implies it). (Note: openclaw pack min is t4g.large, not xlarge — immaterial.)
+6. **Manifest is openclaw-bound**: health_check AND provides.services
+   ([openclaw-gateway]) assume primary=openclaw. health_check is operationally
+   inert (only checked for presence by test-pack-contracts) — keep static but
+   document; install.sh must only reference/enable openclaw-gateway when
+   primary=openclaw. `agents` helper is the real runtime health surface.
 7. **CFN**: add `Primary` param (AllowedValues openclaw|hermes|roundhouse,
-   default openclaw) + UserData passthrough, alongside DailyDriver/CodexModel.
+   default openclaw) + UserData passthrough, TOGETHER with the §12.6 batch
+   (troika in PackName AllowedValues, DailyDriver, CodexModel — none exist yet;
+   UserData currently passes only `--model`, template.yaml:1133).
 8. **Installer question**: "Which OpenClaw-family agent is your first horse?"
    (gum choose) + `--primary` flag; review summary line.
+9. **⚠ primary=roundhouse needs Telegram creds** (was a review BLOCKER):
+   roundhouse install.sh hard-fails without telegram_bot_token_secret +
+   telegram_user (roundhouse/install.sh:97-129), and the installer only collects
+   them when PACK_NAME==roundhouse (install.sh:~2815). Phase 3 MUST extend that
+   prompt condition to `troika && primary==roundhouse` and plumb the params
+   through CFN/bootstrap to the dep. Also note roundhouse is primarily a Telegram
+   daemon (systemd service); its TUI exists (`roundhouse tui`) so autolaunch is
+   still valid.
+10. **Shell profile**: troika banner/aliases (loki, lt) are openclaw-flavored —
+    make primary-aware in Phase 4 (autolaunch/profile phase).
+11. Cleanup (unrelated, low-pri): hermes manifest says `deps: []` while registry
+    gives it bedrockify — metadata drift, masked by troika's explicit dep.
 
 ## 12. Review amendments (Codex/GPT-5.5, verified against code)
 
