@@ -124,6 +124,10 @@ LITELLM_KEY=""
 LITELLM_MODEL=""
 PROVIDER_KEY=""
 SKIP_TELEMETRON="false"
+# Troika-specific params (primary horse, daily-driver, codex model — §12a.1, §12b)
+PRIMARY=""
+DAILY_DRIVER=""
+CODEX_MODEL=""
 # Pack-specific: optional Secrets Manager id/arn to resolve at install time
 # into KIRO_API_KEY inside the kiro-cli pack (and potentially others later).
 # The raw key is NEVER written to CFN state, UserData, or bootstrap logs.
@@ -216,6 +220,21 @@ while [[ $# -gt 0 ]]; do
       TELEGRAM_USER="$2"
       shift 2
       ;;
+    --primary)
+      [[ $# -gt 1 ]] || { echo "ERROR: --primary requires a value" >&2; exit 1; }
+      PRIMARY="$2"
+      shift 2
+      ;;
+    --daily-driver)
+      [[ $# -gt 1 ]] || { echo "ERROR: --daily-driver requires a value" >&2; exit 1; }
+      DAILY_DRIVER="$2"
+      shift 2
+      ;;
+    --codex-model)
+      [[ $# -gt 1 ]] || { echo "ERROR: --codex-model requires a value" >&2; exit 1; }
+      CODEX_MODEL="$2"
+      shift 2
+      ;;
     --*)
       # Skip unknown options (with optional value)
       if [[ $# -gt 1 ]] && [[ "$2" != --* ]]; then
@@ -256,6 +275,9 @@ jq -n \
   --arg telegram_bot_token_secret "$TELEGRAM_BOT_TOKEN_SECRET" \
   --arg telegram_user "$TELEGRAM_USER" \
   --arg skip_telemetron "$SKIP_TELEMETRON" \
+  --arg primary "$PRIMARY" \
+  --arg daily_driver "$DAILY_DRIVER" \
+  --arg codex_model "$CODEX_MODEL" \
   '{pack:$pack, profile:$profile, region:$region, model:$model, gw_port:$gw_port,
     model_mode:$model_mode, bedrockify_port:$bedrockify_port,
     hermes_model:$hermes_model, litellm_url:$litellm_url,
@@ -264,7 +286,10 @@ jq -n \
     "from-secret":$from_secret,
     telegram_bot_token_secret:$telegram_bot_token_secret,
     telegram_user:$telegram_user,
-    "skip-telemetron":$skip_telemetron}' > "${PACK_CONFIG}"
+    "skip-telemetron":$skip_telemetron,
+    primary:$primary,
+    "daily-driver":$daily_driver,
+    "codex-model":$codex_model}' > "${PACK_CONFIG}"
 chmod 600 "${PACK_CONFIG}"
 chown ec2-user:ec2-user "${PACK_CONFIG}"
 export PACK_CONFIG
@@ -323,6 +348,22 @@ registry_get_deps() {
   " "$REGISTRY"
 }
 
+# get_effective_deps PACK — registry_get_deps with troika primary-substitution (§12a.1, §12b).
+# When PACK_NAME=troika and PRIMARY≠openclaw, replaces the 'openclaw' dep with the
+# selected primary. Applied to BOTH step-counting and install dispatch via this single
+# helper (not two copies — §12b). No-op when primary=openclaw or pack≠troika.
+get_effective_deps() {
+  local pack="$1"
+  local dep
+  while IFS= read -r dep; do
+    if [[ "$pack" == "troika" && "${PRIMARY:-openclaw}" != "openclaw" && "$dep" == "openclaw" ]]; then
+      echo "${PRIMARY}"
+    else
+      echo "$dep"
+    fi
+  done < <(registry_get_deps "$pack")
+}
+
 # registry_get_data_vol PACK — prints data_volume_gb value or "80" default
 registry_get_data_vol() {
   local pack="$1"
@@ -344,7 +385,7 @@ _total_steps=$(_count_steps_in "${DEPLOY_DIR}/bootstrap.sh")
 while IFS= read -r _dep; do
   [[ -n "$_dep" ]] && _dep_script="${PACKS_DIR}/${_dep}/install.sh" && \
     [[ -f "$_dep_script" ]] && _total_steps=$((_total_steps + $(_count_steps_in "$_dep_script")))
-done < <(registry_get_deps "${PACK_NAME}")
+done < <(get_effective_deps "${PACK_NAME}")
 
 # Add steps from main pack
 _pack_script="${PACKS_DIR}/${PACK_NAME}/install.sh"
@@ -615,7 +656,7 @@ step "Phase 2: Pack Dispatch"
 DEPS=()
 while IFS= read -r dep; do
   [[ -n "$dep" ]] && DEPS+=("$dep")
-done < <(registry_get_deps "${PACK_NAME}")
+done < <(get_effective_deps "${PACK_NAME}")
 
 info "Pack: ${PACK_NAME}"
 if [[ ${#DEPS[@]} -gt 0 ]]; then
