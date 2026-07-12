@@ -1422,6 +1422,17 @@ check_bedrock_access() {
     echo -e "    ${DIM}$(echo "$invoke_err" | head -1)${NC}"
     _bedrock_access_guidance "$probe_region"
   fi
+
+  # Phase 5: Troika Codex (Bedrock Mantle) model probe — non-fatal, independent
+  # of the Sonnet result above. BEDROCK_ACCESS_OK tracks Sonnet only.
+  # PACK_NAME is not yet resolved at preflight time (pack selection runs later);
+  # detect troika early via PRESELECT_PACK (--pack flag) or TROIKA_CODEX_MODEL
+  # (--codex-model flag).
+  if [[ "${PACK_NAME:-}" == "troika" ]] \
+     || [[ "${PRESELECT_PACK:-}" == "troika" ]] \
+     || [[ -n "${TROIKA_CODEX_MODEL:-}" ]]; then
+    _check_codex_model_access "${TROIKA_CODEX_MODEL:-openai.gpt-5.5}" "$probe_region"
+  fi
 }
 
 _bedrock_access_guidance() {
@@ -1444,6 +1455,61 @@ _bedrock_access_guidance() {
   echo "  https://${probe_region}.console.aws.amazon.com/bedrock/home?region=${probe_region}#/modelaccess"
   echo ""
   confirm_or_abort "Continue with the install anyway?" "default_yes"
+}
+
+# Phase 5: Probe Bedrock Mantle (openai.*) model access for Troika's Codex CLI.
+# Mantle models use the OpenAI-compatible Responses API, NOT bedrock-runtime
+# converse — attempt converse first; fall back to list-foundation-models grep
+# for openai.* ids. Non-fatal: warns and lets the install continue.
+_check_codex_model_access() {
+  local codex_model="$1"
+  local probe_region="$2"
+
+  echo ""
+  info "Checking Codex (Bedrock Mantle) model access: ${codex_model} @ ${probe_region}..."
+
+  # Attempt 1: converse — Mantle models likely return UnsupportedOperationException
+  # (they use the OpenAI-compatible Responses API path, not converse). We try
+  # anyway because the error response is informative and throttle = access OK.
+  local codex_err=""
+  if codex_err=$(aws bedrock-runtime converse \
+      --model-id "$codex_model" \
+      --messages '[{"role":"user","content":[{"text":"ping"}]}]' \
+      --inference-config '{"maxTokens":1}' \
+      --region "$probe_region" 2>&1 >/dev/null); then
+    ok "Codex Mantle model verified via converse (${codex_model})"
+    return 0
+  elif grep -qiE "ThrottlingException|TooManyRequests|ServiceQuotaExceeded" <<<"$codex_err"; then
+    ok "Codex Mantle model access verified (throttled — access is enabled)"
+    return 0
+  fi
+
+  # Attempt 2: list-foundation-models grep for openai.* ids.
+  # Confirms Bedrock Mantle is visible/available in this region + account,
+  # even if converse is unsupported for Mantle model IDs.
+  local openai_ids=""
+  openai_ids=$(aws bedrock list-foundation-models \
+    --region "$probe_region" \
+    --query "modelSummaries[?contains(modelId, 'openai')]" \
+    --output text 2>/dev/null || true)
+
+  if [[ -n "$openai_ids" ]]; then
+    ok "Bedrock Mantle models visible (openai.* ids found in ${probe_region})"
+    info "Codex CLI uses the OpenAI-compatible Responses API — converse probe does not apply."
+  else
+    warn "Codex Mantle model '${codex_model}' may not be accessible in ${probe_region}."
+    echo -e "    ${DIM}$(echo "$codex_err" | head -1)${NC}"
+    echo ""
+    echo "  Troika's Codex CLI uses Amazon Bedrock Mantle (openai.* model IDs)."
+    echo "  Bedrock Mantle access is separate from Anthropic model access."
+    echo "  Enable Mantle model access (if available to your account):"
+    echo "  https://${probe_region}.console.aws.amazon.com/bedrock/home?region=${probe_region}#/modelaccess"
+    echo ""
+    echo "  Note: Bedrock Mantle is region-limited; us-east-1 is the recommended region."
+    echo "  The install will continue — Codex will not function until access is enabled."
+    echo ""
+    # Non-fatal: no confirm_or_abort (user already saw Sonnet warning if applicable)
+  fi
 }
 
 check_vpc_quota() {
@@ -2966,6 +3032,14 @@ run_config_and_review() {
     else
       ok "Daily driver (troika): ${TROIKA_DAILY_DRIVER} (pre-selected)"
     fi
+
+    # Cross-validate daily-driver vs primary (catches --daily-driver openclaw --primary hermes)
+    case "${TROIKA_DAILY_DRIVER}" in
+      "${TROIKA_PRIMARY}"|claude-code|codex-cli|none) : ;;
+      *)
+        fail "--daily-driver '${TROIKA_DAILY_DRIVER}' is not valid when --primary='${TROIKA_PRIMARY}'. Valid: ${TROIKA_PRIMARY} | claude-code | codex-cli | none"
+        ;;
+    esac
 
     # Codex model: default if not pre-set
     TROIKA_CODEX_MODEL="${TROIKA_CODEX_MODEL:-openai.gpt-5.5}"
