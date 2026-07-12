@@ -106,7 +106,7 @@ Full details: [Bootstrap Scripts Guide](https://github.com/inceptionstack/lowkey
 
 ## Shared Files
 
-Files at the `deploy/` level are shared by the deployment path:
+Files at the `deploy/` level are used by the CloudFormation deployment:
 
 - `bootstrap.sh` — generic EC2 bootstrap dispatcher (installs system deps, runs pack install scripts)
 - `brain/` — template workspace files (SOUL.md, AGENTS.md, etc.) copied to each new instance

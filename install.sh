@@ -304,9 +304,9 @@ _telem_resolve_install_method() {
 
 # Resolve the deploy method to a catalog-compliant slug for telemetry.
 # install.sh stores DEPLOY_METHOD as a numeric code (1=cfn-console, 2=cfn-cli)
-# and PRESELECT_METHOD as the raw user input. Both need normalization to the
-# server catalog: cfn | manual | ec2-direct (terraform is a legacy catalog
-# value the client no longer emits).
+# and PRESELECT_METHOD as the raw user input. Both need normalization for
+# the server catalog: the client emits only `cfn`; unresolved values return
+# empty so the caller omits the prop.
 #
 # Returns empty string when unresolved so callers can omit the prop
 # (server validator drops any value not matching the enum, which pollutes

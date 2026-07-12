@@ -129,7 +129,7 @@ Deployment is CloudFormation-based, via the AWS Console or the AWS CLI:
 
 ## Step 3: Deploy
 
-### CloudFormation via the AWS CLI
+### CloudFormation via Console or CLI
 
 **Via AWS Console (no CLI needed):**
 1. Download [`deploy/cloudformation/template.yaml`](../deploy/cloudformation/template.yaml)
