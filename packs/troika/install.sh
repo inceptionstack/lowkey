@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# packs/troika/install.sh — Wire OpenClaw + Claude Code + Codex CLI (all via Bedrock)
+# packs/troika/install.sh — Wire OpenClaw/Hermes + Claude Code + Codex CLI (all via Bedrock)
 #
-# Runs AFTER deps: bedrockify → openclaw → claude-code → codex-cli
+# Runs AFTER deps: bedrockify → <primary> → claude-code → codex-cli
+# (bootstrap substitutes openclaw dep with selected primary; §12a.1)
 #
 # Responsibilities:
 #   1. Validate and persist the daily-driver selection
@@ -16,6 +17,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PACKS_REL_DIR="${SCRIPT_DIR}/.."  # parent of all pack directories
 
 # shellcheck source=../common.sh
 source "${SCRIPT_DIR}/../common.sh"
@@ -23,11 +25,12 @@ source "${SCRIPT_DIR}/../common.sh"
 # ── Constants ─────────────────────────────────────────────────────────────────
 # §12.8: sentinel string used for idempotency guard on ~/.bashrc block
 AUTOLAUNCH_SENTINEL="# --- troika-autolaunch ---"
+AWS_REGION_SENTINEL="# --- troika-aws-region ---"
 DAILY_DRIVER_FILE="${HOME}/.config/lowkey/daily-driver"
-VALID_DRIVERS=(openclaw claude-code codex-cli none)
 
 # ── Defaults (from pack config, then CLI overrides) ───────────────────────────
-PACK_ARG_DAILY_DRIVER="$(pack_config_get "daily-driver" "openclaw")"
+PACK_ARG_PRIMARY="$(pack_config_get "primary"       "openclaw")"
+PACK_ARG_DAILY_DRIVER="$(pack_config_get "daily-driver" "")"   # empty → tracks primary
 PACK_ARG_MODEL="$(pack_config_get model "us.anthropic.claude-sonnet-4-6")"
 PACK_ARG_CODEX_MODEL="$(pack_config_get "codex-model" "openai.gpt-5.5")"
 PACK_ARG_REGION="$(pack_config_get region "us-east-1")"
@@ -41,8 +44,9 @@ Wire OpenClaw + Claude Code + Codex CLI on one instance via Amazon Bedrock (Troi
 Runs after deps: bedrockify → openclaw → claude-code → codex-cli.
 
 Options:
-  --daily-driver <name>   Agent to auto-launch on SSM login     (default: openclaw)
-                          Valid: openclaw | claude-code | codex-cli | none
+  --primary <name>        OpenClaw-family first horse (openclaw | hermes; default: openclaw)
+  --daily-driver <name>   Agent to auto-launch on SSM login (default: follows primary)
+                          Valid: <primary> | claude-code | codex-cli | none
   --model <id>            Bedrock model for Claude-family agents (default: us.anthropic.claude-sonnet-4-6)
   --codex-model <id>      Bedrock Mantle model for Codex CLI    (default: openai.gpt-5.5)
   --region <region>       AWS region for Bedrock                (default: us-east-1)
@@ -59,23 +63,61 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --help|-h)       usage; exit 0 ;;
-    --daily-driver)  PACK_ARG_DAILY_DRIVER="$2"; shift 2 ;;
-    --model)         PACK_ARG_MODEL="$2";         shift 2 ;;
+    --primary)       PACK_ARG_PRIMARY="$2";       shift 2 ;;
+    --daily-driver)  PACK_ARG_DAILY_DRIVER="$2";  shift 2 ;;
+    --model)         PACK_ARG_MODEL="$2";          shift 2 ;;
     --codex-model)   PACK_ARG_CODEX_MODEL="$2";   shift 2 ;;
     --region)        PACK_ARG_REGION="$2";         shift 2 ;;
     *) [[ $# -gt 1 ]] && [[ "$2" != --* ]] && shift 2 || shift ;;
   esac
 done
 
-DAILY_DRIVER="${PACK_ARG_DAILY_DRIVER}"
+PRIMARY="${PACK_ARG_PRIMARY}"
 MODEL="${PACK_ARG_MODEL}"
 CODEX_MODEL="${PACK_ARG_CODEX_MODEL}"
 REGION="${PACK_ARG_REGION}"
 
+# §12b.1: Single source of truth — read PACK_TUI_COMMAND from each pack's shell-profile.
+# VALID_DRIVERS, autolaunch case, and agents helper ALL derive from _read_tui_cmd().
+_read_tui_cmd() {
+  local profile="$1"
+  [[ -f "$profile" ]] || { printf ''; return 0; }
+  local line cmd
+  line=$(grep -m1 '^PACK_TUI_COMMAND=' "$profile" 2>/dev/null || true)
+  [[ -z "$line" ]] && { printf ''; return 0; }
+  cmd="${line#PACK_TUI_COMMAND=}"
+  cmd="${cmd#\"}"   # strip leading "
+  cmd="${cmd%\"}"   # strip trailing "
+  printf '%s' "${cmd}"
+}
+
+_PRIMARY_CMD="$(_read_tui_cmd "${PACKS_REL_DIR}/${PRIMARY}/resources/shell-profile.sh")"
+_PRIMARY_CMD="${_PRIMARY_CMD:-${PRIMARY}}"
+_CLAUDE_CMD="$(_read_tui_cmd "${PACKS_REL_DIR}/claude-code/resources/shell-profile.sh")"
+_CLAUDE_CMD="${_CLAUDE_CMD:-claude}"
+_CODEX_CMD="$(_read_tui_cmd "${PACKS_REL_DIR}/codex-cli/resources/shell-profile.sh")"
+_CODEX_CMD="${_CODEX_CMD:-codex}"
+
+_PRIMARY_BIN="${_PRIMARY_CMD%% *}"
+_CLAUDE_BIN="${_CLAUDE_CMD%% *}"
+_CODEX_BIN="${_CODEX_CMD%% *}"
+
+# Derive VALID_DRIVERS from metadata — §12a.2, §12b.1 (no hardcoded openclaw)
+VALID_DRIVERS=("${PRIMARY}" claude-code codex-cli none)
+
+# DAILY_DRIVER: default tracks selected primary — §12a.2
+DAILY_DRIVER="${PACK_ARG_DAILY_DRIVER:-${PRIMARY}}" 
+
 pack_banner "troika"
-log "daily-driver=${DAILY_DRIVER} model=${MODEL} codex-model=${CODEX_MODEL} region=${REGION}"
+log "primary=${PRIMARY} daily-driver=${DAILY_DRIVER} model=${MODEL} codex-model=${CODEX_MODEL} region=${REGION}"
 
 # ── Validate daily-driver ─────────────────────────────────────────────────────
+step "Validating primary"
+case "${PRIMARY}" in
+  openclaw|hermes) ok "primary is valid: ${PRIMARY}" ;;
+  *) fail "Invalid primary '${PRIMARY}'. Must be openclaw or hermes." ;;
+esac
+
 step "Validating daily-driver"
 
 _valid_driver=0
@@ -84,9 +126,9 @@ for _v in "${VALID_DRIVERS[@]}"; do
 done
 
 if [[ "$_valid_driver" -eq 0 ]]; then
-  fail "Invalid daily-driver '${DAILY_DRIVER}'. Must be one of: openclaw | claude-code | codex-cli | none"
+  fail "Invalid daily-driver '${DAILY_DRIVER}'. Valid set for primary=${PRIMARY}: ${VALID_DRIVERS[*]}"
 fi
-ok "daily-driver is valid: ${DAILY_DRIVER}"
+ok "daily-driver is valid: ${DAILY_DRIVER} (primary=${PRIMARY})"
 
 # ── Persist daily-driver ──────────────────────────────────────────────────────
 step "Persisting daily-driver config"
@@ -196,12 +238,12 @@ ok "Codex Bedrock config merged: ${CODEX_CONFIG}"
 step "Ensuring AWS_REGION exported in .bashrc"
 
 BASHRC="${HOME}/.bashrc"
-if ! grep -qF 'export AWS_REGION=' "${BASHRC}" 2>/dev/null; then
-  printf '\n# Troika: Codex CLI reads AWS_REGION (not only AWS_DEFAULT_REGION)\nexport AWS_REGION="%s"\n' \
-    "${REGION}" >> "${BASHRC}"
-  ok "AWS_REGION=\"${REGION}\" exported in ${BASHRC}"
+if grep -qF "${AWS_REGION_SENTINEL}" "${BASHRC}" 2>/dev/null; then
+  ok "AWS_REGION block already present in ${BASHRC} (idempotent)"
 else
-  ok "AWS_REGION already present in ${BASHRC}"
+  printf '\n%s\n# Troika: Codex CLI reads AWS_REGION (not only AWS_DEFAULT_REGION)\nexport AWS_REGION="%s"\n%s\n' \
+    "${AWS_REGION_SENTINEL}" "${REGION}" "${AWS_REGION_SENTINEL}" >> "${BASHRC}"
+  ok "AWS_REGION=\"${REGION}\" sentinel-written to ${BASHRC}"
 fi
 
 # ── Install agents helper ─────────────────────────────────────────────────────
@@ -213,37 +255,39 @@ AGENTS_TMP="$(mktemp)"
 # shellcheck disable=SC2064
 trap "rm -f '${AGENTS_TMP}'" EXIT
 
-cat > "${AGENTS_TMP}" <<'AGENTS_SCRIPT'
+cat > "${AGENTS_TMP}" <<AGENTS_SCRIPT
+# shellcheck disable=SC2086  # intentional unquoted expansion of metadata vars in generated script
 #!/usr/bin/env bash
 # agents — Troika multi-harness helper
-# Managed by packs/troika/install.sh — do not edit manually.
+# Generated by packs/troika/install.sh (primary=${PRIMARY}) — do not edit manually.
 set -euo pipefail
 
-DAILY_DRIVER_FILE="${HOME}/.config/lowkey/daily-driver"
-VALID_DRIVERS=(openclaw claude-code codex-cli none)
+DAILY_DRIVER_FILE="\${HOME}/.config/lowkey/daily-driver"
+# VALID_DRIVERS derives from primary selected at install time (§12b.1, §12a.2).
+VALID_DRIVERS=(${PRIMARY} claude-code codex-cli none)
 
 _valid_driver() {
-  local d="$1"
-  for v in "${VALID_DRIVERS[@]}"; do
-    [[ "$d" == "$v" ]] && return 0
+  local d="\$1"
+  for v in "\${VALID_DRIVERS[@]}"; do
+    [[ "\$d" == "\$v" ]] && return 0
   done
   return 1
 }
 
-case "${1:-}" in
+case "\${1:-}" in
   driver)
-    new_driver="${2:-}"
-    if [[ -z "$new_driver" ]]; then
-      echo "Usage: agents driver <openclaw|claude-code|codex-cli|none>" >&2
+    new_driver="\${2:-}"
+    if [[ -z "\$new_driver" ]]; then
+      echo "Usage: agents driver <${PRIMARY}|claude-code|codex-cli|none>" >&2
       exit 1
     fi
-    if ! _valid_driver "$new_driver"; then
-      echo "Unknown driver: ${new_driver} (valid: openclaw | claude-code | codex-cli | none)" >&2
+    if ! _valid_driver "\$new_driver"; then
+      echo "Unknown driver: \${new_driver} (valid: ${PRIMARY} | claude-code | codex-cli | none)" >&2
       exit 1
     fi
-    mkdir -p "$(dirname "${DAILY_DRIVER_FILE}")"
-    printf '%s\n' "${new_driver}" > "${DAILY_DRIVER_FILE}"
-    echo "Daily driver set to: ${new_driver}"
+    mkdir -p "\$(dirname "\${DAILY_DRIVER_FILE}")"
+    printf '%s\n' "\${new_driver}" > "\${DAILY_DRIVER_FILE}"
+    echo "Daily driver set to: \${new_driver}"
     ;;
 
   review)
@@ -253,38 +297,34 @@ case "${1:-}" in
 
   ""|status)
     dd="(none)"
-    [[ -f "${DAILY_DRIVER_FILE}" ]] && dd="$(cat "${DAILY_DRIVER_FILE}")"
+    [[ -f "\${DAILY_DRIVER_FILE}" ]] && dd="\$(cat "\${DAILY_DRIVER_FILE}")"
     printf "\n=== Troika — Agent Status ===\n\n"
-    for cmd in openclaw claude codex; do
-      if command -v "${cmd}" &>/dev/null; then
-        ver="$(${cmd} --version 2>/dev/null | head -1 || echo unknown)"
-        printf "  \033[0;32m✓\033[0m %-12s %s\n" "${cmd}:" "${ver}"
+    for _bin in "${_PRIMARY_BIN}" "${_CLAUDE_BIN}" "${_CODEX_BIN}"; do
+      if command -v "\${_bin}" &>/dev/null; then
+        _ver="\$("\${_bin}" --version 2>/dev/null | head -1 || echo unknown)"
+        printf "  \033[0;32m✓\033[0m %-12s %s\n" "\${_bin}:" "\${_ver}"
       else
-        printf "  \033[0;31m✗\033[0m %-12s not found\n" "${cmd}:"
+        printf "  \033[0;31m✗\033[0m %-12s not found\n" "\${_bin}:"
       fi
     done
-    printf "\n  Daily driver:  %s\n\n" "${dd}"
+    unset _bin _ver
+    printf "\n  Daily driver:  %s\n\n" "\${dd}"
     printf "  agents driver <name>  → switch daily driver\n"
     printf "  LOKI_NO_TUI=1         → suppress auto-launch for this session\n\n"
     ;;
 
   *)
-    cat <<USAGE
-Usage: agents [status | driver <name>]
-
-  status              Show installed agents and current daily driver
-  driver <name>       Set daily driver (openclaw | claude-code | codex-cli | none)
-
-Daily driver values:
-  openclaw            Auto-launch: openclaw tui
-  claude-code         Auto-launch: claude
-  codex-cli           Auto-launch: codex
-  none                Disable auto-launch
-
-Escape hatches:
-  agents driver none  Disable auto-launch permanently
-  LOKI_NO_TUI=1       Disable auto-launch for this session
-USAGE
+    printf 'Usage: agents [status | driver <name>]\n\n'
+    printf '  status              Show installed agents and current daily driver\n'
+    printf '  driver <name>       Set daily driver (%s | claude-code | codex-cli | none)\n\n' "${PRIMARY}"
+    printf 'Daily driver values:\n'
+    printf '  %-20s Auto-launch: %s\n' "${PRIMARY}" "${_PRIMARY_CMD}"
+    printf '  %-20s Auto-launch: %s\n' "claude-code" "${_CLAUDE_CMD}"
+    printf '  %-20s Auto-launch: %s\n' "codex-cli"   "${_CODEX_CMD}"
+    printf '  %-20s Disable auto-launch\n' "none"
+    printf '\nEscape hatches:\n'
+    printf '  agents driver none  Disable auto-launch permanently\n'
+    printf '  LOKI_NO_TUI=1       Disable auto-launch for this session\n\n'
     exit 1
     ;;
 esac
@@ -326,7 +366,7 @@ else
 
 ${AUTOLAUNCH_SENTINEL}
 # Troika daily-driver auto-launch
-# Managed by packs/troika/install.sh — do not edit manually.
+# Managed by packs/troika/install.sh (primary=${PRIMARY}) — do not edit manually.
 # To disable: agents driver none   OR   export LOKI_NO_TUI=1
 if [[ \$- == *i* ]] && [[ -t 0 ]] && [[ -z "\${LOKI_TUI_LAUNCHED:-}" ]] \\
    && [[ -z "\${LOKI_NO_TUI:-}" ]] && [[ -f ~/.config/lowkey/daily-driver ]]; then
@@ -334,17 +374,28 @@ if [[ \$- == *i* ]] && [[ -t 0 ]] && [[ -z "\${LOKI_TUI_LAUNCHED:-}" ]] \\
   _dd=\$(<~/.config/lowkey/daily-driver)
   echo "Launching \${_dd} (daily driver) — Ctrl+C to skip, LOKI_NO_TUI=1 to disable"
   sleep 2   # grace period to Ctrl+C
+  # SC2086: command vars intentionally unquoted — multi-word cmds (e.g. "openclaw tui")
+  # shellcheck disable=SC2086
   case "\$_dd" in
-    openclaw)    openclaw tui ;;
-    claude-code) claude ;;
-    codex-cli)   codex ;;
-    none)        : ;;
+    ${PRIMARY})    ${_PRIMARY_CMD} ;;
+    claude-code)   ${_CLAUDE_CMD} ;;
+    codex-cli)     ${_CODEX_CMD} ;;
+    none)          : ;;
   esac
   unset _dd
 fi
 ${AUTOLAUNCH_SENTINEL}
 AUTOLAUNCH
   ok "Auto-launch block appended to ${BASHRC}"
+fi
+
+# §12a.6: Only reference/enable openclaw-gateway when primary=openclaw
+if [[ "${PRIMARY}" == "openclaw" ]]; then
+  if systemctl is-enabled openclaw-gateway.service >/dev/null 2>&1; then
+    ok "openclaw-gateway service is enabled (primary=openclaw)"
+  else
+    warn "openclaw-gateway service not found (primary=openclaw)"
+  fi
 fi
 
 # ── Write SSM parameter for observability ────────────────────────────────────

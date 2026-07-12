@@ -19,9 +19,12 @@ requirements:
   min_instance_type: t4g.xlarge
 
 params:
-  - name: daily-driver
-    description: "Agent to auto-launch on SSM login (openclaw | claude-code | codex-cli | none)"
+  - name: primary
+    description: "OpenClaw-family first horse (openclaw | hermes; default openclaw)"
     default: "openclaw"
+  - name: daily-driver
+    description: "Agent to auto-launch on SSM login (primary | claude-code | codex-cli | none; default follows primary)"
+    default: ""
   - name: model
     description: "Bedrock model ID for Claude-family agents (OpenClaw + Claude Code)"
     default: "us.anthropic.claude-sonnet-4-6"

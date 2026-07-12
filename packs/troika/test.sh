@@ -56,7 +56,7 @@ if data.get("deps") != expected_deps:
     sys.exit(f"deps wrong: {data.get('deps')} != {expected_deps}")
 # required params present
 param_names = [p["name"] for p in data.get("params", [])]
-for req in ["daily-driver", "model", "codex-model", "region"]:
+for req in ["primary", "daily-driver", "model", "codex-model", "region"]:
     if req not in param_names:
         sys.exit(f"missing param: {req}")
 # provides commands includes all four
@@ -71,18 +71,33 @@ PY
     fail "manifest.yaml: structure invalid (see output above)"
   fi
 
-  # daily-driver param has default = openclaw
+  # primary param: present with default=openclaw
+  if python3 - "${MANIFEST}" <<'PY' 2>/dev/null; then
+import sys, yaml
+data = yaml.safe_load(open(sys.argv[1]))
+params = {p["name"]: p for p in data.get("params", [])}
+pr = params.get("primary", {})
+assert "primary" in params, "primary param missing"
+assert pr.get("default") == "openclaw", f"primary default={pr.get('default')!r}"
+print("OK")
+PY
+    pass "manifest.yaml: primary param present with default openclaw"
+  else
+    fail "manifest.yaml: primary param missing or default not openclaw"
+  fi
+
+  # daily-driver default is empty string (tracks primary — §12a.2)
   if python3 - "${MANIFEST}" <<'PY' 2>/dev/null; then
 import sys, yaml
 data = yaml.safe_load(open(sys.argv[1]))
 params = {p["name"]: p for p in data.get("params", [])}
 dd = params.get("daily-driver", {})
-assert dd.get("default") == "openclaw", f"daily-driver default={dd.get('default')!r}"
+assert dd.get("default") in ("", None), f"daily-driver default should be empty, got {dd.get('default')!r}"
 print("OK")
 PY
-    pass "manifest.yaml: daily-driver param default is 'openclaw'"
+    pass "manifest.yaml: daily-driver default is empty (tracks primary — §12a.2)"
   else
-    fail "manifest.yaml: daily-driver default is not 'openclaw'"
+    fail "manifest.yaml: daily-driver default is not empty (should track primary)"
   fi
 
   # experimental: true
@@ -134,19 +149,59 @@ for flag in --daily-driver --model --codex-model --region --help; do
     || fail "install.sh: --help missing ${flag}"
 done
 
-# VALID_DRIVERS array contains all four allowed values (including 'none' per §12.8)
-# Check the VALID_DRIVERS array definition in install.sh
+# VALID_DRIVERS derives from PRIMARY metadata (§12b.1 — not hardcoded)
 _valid_drivers_line="$(grep 'VALID_DRIVERS=(' "${INSTALL}" 2>/dev/null || true)"
-for drv in openclaw claude-code codex-cli none; do
+for drv in claude-code codex-cli none; do
   printf '%s' "${_valid_drivers_line}" | grep -q "${drv}" \
-    && pass "install.sh: '${drv}' in VALID_DRIVERS array" \
-    || fail "install.sh: '${drv}' missing from VALID_DRIVERS array"
+    && pass "install.sh: '${drv}' in VALID_DRIVERS" \
+    || fail "install.sh: '${drv}' missing from VALID_DRIVERS"
 done
+# §12b.1: at least one VALID_DRIVERS line should reference PRIMARY dynamically
+if grep -q 'VALID_DRIVERS=.*PRIMARY' "${INSTALL}"; then
+  pass "install.sh: VALID_DRIVERS uses PRIMARY slot — §12b.1"
+else
+  fail "install.sh: VALID_DRIVERS does not use PRIMARY slot"
+fi
 
 # Validation logic present (rejects invalid drivers)
 grep -q '_valid_driver' "${INSTALL}" \
   && pass "install.sh: has daily-driver validation logic" \
   || fail "install.sh: missing daily-driver validation logic"
+
+# §12b.1 litmus: _read_tui_cmd single lookup helper
+if grep -q '_read_tui_cmd' "${INSTALL}"; then
+  pass "install.sh: _read_tui_cmd lookup helper present — §12b.1"
+else
+  fail "install.sh: _read_tui_cmd missing — required by §12b.1"
+fi
+
+# --primary flag in arg parsing
+if grep -q -- '--primary' "${INSTALL}"; then
+  pass "install.sh: --primary arg parsed"
+else
+  fail "install.sh: --primary not parsed"
+fi
+
+# primary read from pack_config
+if grep -q 'pack_config_get.*primary' "${INSTALL}"; then
+  pass "install.sh: primary read from PACK_CONFIG"
+else
+  fail "install.sh: primary not read from PACK_CONFIG"
+fi
+
+# DAILY_DRIVER defaults to PRIMARY — §12a.2
+if grep -q 'DAILY_DRIVER.*:-.*PRIMARY' "${INSTALL}"; then
+  pass "install.sh: DAILY_DRIVER defaults to PRIMARY — §12a.2"
+else
+  fail "install.sh: DAILY_DRIVER does not default to PRIMARY"
+fi
+
+# openclaw-gateway guard — §12a.6
+if grep -q 'PRIMARY.*openclaw' "${INSTALL}"; then
+  pass "install.sh: openclaw-gateway gated on primary=openclaw — §12a.6"
+else
+  fail "install.sh: missing openclaw-gateway primary=openclaw guard"
+fi
 
 # ── 3. daily-driver validation (live behaviour) ───────────────────────────────
 header "Test: daily-driver validation"
@@ -156,6 +211,13 @@ if PACK_CONFIG=/dev/null bash "${INSTALL}" --daily-driver "INVALID_DRIVER_XYZ" >
   fail "install.sh: accepted invalid daily-driver 'INVALID_DRIVER_XYZ' (should reject)"
 else
   pass "install.sh: rejects invalid daily-driver 'INVALID_DRIVER_XYZ'"
+fi
+
+# Invalid primary must also be rejected
+if PACK_CONFIG=/dev/null bash "${INSTALL}" --primary "INVALID_PRIMARY_XYZ" >/dev/null 2>&1; then
+  fail "install.sh: accepted invalid primary 'INVALID_PRIMARY_XYZ' (should reject)"
+else
+  pass "install.sh: rejects invalid primary 'INVALID_PRIMARY_XYZ'"
 fi
 
 # 'none' must be accepted (§12.8 requirement) — verified via VALID_DRIVERS array
