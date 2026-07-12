@@ -388,7 +388,7 @@ EOF
 
   info "Initializing Terraform..."
   if ! terraform init -input=false -reconfigure >/dev/null 2>&1; then
-    warn "Terraform init failed"; rm -rf "$tf_dir"; return 1
+    warn "Terraform init failed"; cd /; rm -rf "$tf_dir"; return 1
   fi
 
   info "Running terraform destroy (this may take several minutes)..."
@@ -405,7 +405,7 @@ EOF
   if [[ $rc -ne 0 ]]; then
     warn "Terraform destroy failed:"; cat "$log"
   fi
-  rm -f "$log"; rm -rf "$tf_dir"
+  rm -f "$log"; cd /; rm -rf "$tf_dir"
   [[ $rc -eq 0 ]]
 }
 

@@ -320,8 +320,6 @@ _telem_resolve_method() {
   m="$(printf '%s' "$m" | tr '[:upper:]' '[:lower:]' 2>/dev/null || printf '')"
   case "$m" in
     cfn|cloudformation)  printf 'cfn\n' ;;
-    manual)              printf 'manual\n' ;;
-    ec2|ec2-direct)      printf 'ec2-direct\n' ;;
     *)                   printf '\n' ;;  # unresolved — caller omits key
   esac
 }
@@ -1594,8 +1592,6 @@ check_existing_deployments() {
   fi
 }
 
-
-
 choose_deploy_method() {
   step "Deploy method"
   # If method was pre-selected via --method, validate and set it
@@ -2051,7 +2047,6 @@ format_cfn_cli_params() {
   echo "$params"
 }
 
-
 show_summary() {
   step "Review & confirm"
 
@@ -2154,7 +2149,6 @@ prepare_repo() {
   fi
 }
 
-
 # ============================================================================
 # Deploy: CloudFormation Console (option 1)
 # ============================================================================
@@ -2224,7 +2218,7 @@ deploy_console() {
 }
 
 # ============================================================================
-# Deploy: CloudFormation / SAM via CLI (options 2-3)
+# Deploy: CloudFormation via CLI
 # ============================================================================
 deploy_cfn_stack() {
   local template="$1" capabilities="$2"

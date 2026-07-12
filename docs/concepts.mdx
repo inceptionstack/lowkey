@@ -41,11 +41,9 @@ Profiles also drive defaults: instance size, which security services turn on, wh
 
 ## Deploy method
 
-Lowkey ships both IaC flavors and keeps them in sync:
+Lowkey deploys via **CloudFormation** — `aws cloudformation create-stack` from the CLI, or template upload in the AWS Console.
 
-- **CloudFormation** (default) — `aws cloudformation create-stack`
-
-Both call the same `deploy/bootstrap.sh` from UserData, so the agent you get is identical either way. Pick based on what the rest of your stack uses.
+Both paths call the same `deploy/bootstrap.sh` from UserData, so the agent you get is identical either way.
 
 ## How they combine
 

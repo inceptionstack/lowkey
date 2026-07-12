@@ -117,12 +117,11 @@ All instances are ARM64 Graviton — better price/performance than x86.
 
 ## Step 2: Choose a Deployment Method
 
-All three methods deploy **identical infrastructure**. Choose based on your tooling preference:
+Deployment is CloudFormation-based, via the AWS Console or the AWS CLI:
 
 | Method | Best For | Docs |
 |--------|----------|------|
-| **CloudFormation** | AWS Console users, StackSets, Organizations | [deploy/cloudformation/](../deploy/cloudformation/) |
-| **SAM** | Serverless teams, `sam deploy --guided` | [deploy/sam/](../deploy/sam/) |
+| **CloudFormation** | AWS Console users, CLI users, StackSets, Organizations | [deploy/cloudformation/](../deploy/cloudformation/) |
 
 **Recommendation for new users:** Use CloudFormation via the AWS Console. Upload the template, fill in the form, click Create. No CLI needed.
 
@@ -130,7 +129,7 @@ All three methods deploy **identical infrastructure**. Choose based on your tool
 
 ## Step 3: Deploy
 
-### Option A: CloudFormation (Recommended for beginners)
+### CloudFormation via the AWS CLI
 
 **Via AWS Console (no CLI needed):**
 1. Download [`deploy/cloudformation/template.yaml`](../deploy/cloudformation/template.yaml)
@@ -159,20 +158,11 @@ aws cloudformation create-stack \
 aws cloudformation wait stack-create-complete --stack-name my-openclaw --region us-east-1
 ```
 
-### Option B: SAM
-
-```bash
-cd deploy/sam
-sam deploy --guided --template-file template.yaml
-# Follow the interactive prompts
-```
-
-
 ## Step 4: Connect and Verify
 
 ### Get Your Instance ID
 
-**CloudFormation/SAM:**
+**CloudFormation:**
 ```bash
 aws cloudformation describe-stacks --stack-name my-openclaw \
   --query 'Stacks[0].Outputs[?OutputKey==`InstanceId`].OutputValue' --output text
@@ -335,7 +325,7 @@ aws ec2 start-instances --instance-ids <id> --region us-east-1
 The data volume persists across stop/start. Loki's gateway auto-starts on boot.
 
 ### How do I delete everything?
-**CloudFormation/SAM:**
+**CloudFormation:**
 ```bash
 aws cloudformation delete-stack --stack-name my-openclaw --region us-east-1
 ```

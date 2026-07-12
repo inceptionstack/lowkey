@@ -40,7 +40,7 @@ Sent at install **start**, install **completion**, and install **failure**.
     "arch": "arm64",
     "os_version": "6.1"
   },
-  "install_method": "cfn",
+  "install_method": "curl",
   "outcome": "completed",
   "duration_ms": 412380,
   "is_test": false,
@@ -80,7 +80,7 @@ We deliberately do **not** collect:
 - ❌ Code, repo contents, prompts, or AI responses
 - ❌ Anything you type into the installer
 - ❌ Your hostname (only a salted sha256 hash of it, combined with the machine-id)
-- ❌ The contents of CloudFormation templates or Terraform plans
+- ❌ The contents of CloudFormation templates
 - ❌ Anything after the install finishes — telemetry is installer-scoped only
 
 ## `machine_id` — what it actually is

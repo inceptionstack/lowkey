@@ -1,6 +1,6 @@
 # Deploy Loki on AWS
 
-Deploy a fully configured [Loki](https://github.com/inceptionstack/lowkey) (powered by [OpenClaw](https://github.com/openclaw/openclaw)) AI assistant on your own AWS account. Choose your preferred IaC tool — all three options deploy identical infrastructure.
+Deploy a fully configured [Loki](https://github.com/inceptionstack/lowkey) (powered by [OpenClaw](https://github.com/openclaw/openclaw)) AI assistant on your own AWS account. Deployment is CloudFormation-based — via the AWS Console or the AWS CLI.
 
 ## Prerequisites
 
@@ -8,16 +8,15 @@ Deploy a fully configured [Loki](https://github.com/inceptionstack/lowkey) (powe
 - Bedrock model access enabled (the template auto-submits the use case form, but model activation can take ~15 minutes)
 - AWS CLI installed
 
-## Choose Your Deployment Method
+## Deployment Method
 
 | Method | Folder | Best For |
 |--------|--------|----------|
-| [CloudFormation](cloudformation/) | `deploy/cloudformation/` | Console deploys, StackSets, Organizations |
-| [SAM](sam/) | `deploy/sam/` | Serverless-familiar teams, `sam deploy --guided` |
+| [CloudFormation](cloudformation/) | `deploy/cloudformation/` | Console deploys, CLI deploys, StackSets, Organizations |
 
 ## What Gets Deployed
 
-All three methods create the same architecture:
+The stack creates the following architecture:
 
 - **VPC** — isolated VPC with public subnet, internet gateway, route table
 - **EC2 Instance** — ARM64 Graviton (AL2023), root + data EBS volumes (gp3, encrypted)
@@ -107,7 +106,7 @@ Full details: [Bootstrap Scripts Guide](https://github.com/inceptionstack/lowkey
 
 ## Shared Files
 
-Files at the `deploy/` level are used by all deployment methods:
+Files at the `deploy/` level are shared by the deployment path:
 
 - `bootstrap.sh` — generic EC2 bootstrap dispatcher (installs system deps, runs pack install scripts)
 - `brain/` — template workspace files (SOUL.md, AGENTS.md, etc.) copied to each new instance
