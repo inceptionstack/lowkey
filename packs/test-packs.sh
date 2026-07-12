@@ -301,6 +301,7 @@ declare -A PACK_RESOURCES
 PACK_RESOURCES[bedrockify]="bedrockify.service.tpl"
 PACK_RESOURCES[openclaw]="config-gen.py openclaw-gateway.service.tpl"
 PACK_RESOURCES[hermes]="hermes-config.yaml.tpl hermes-env.tpl"
+PACK_RESOURCES[troika]="shell-profile.sh"
 
 for pack in "${PACKS[@]}"; do
   RESOURCES_DIR="${SCRIPT_DIR}/${pack}/resources"

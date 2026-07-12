@@ -182,6 +182,54 @@ check_field instance_type "t4g.medium"
 check_field data_volume_gb 0
 check_field brain false
 
+# ── Test 8b: troika pack round-trips with all expected fields ───────────────
+header "Test 8b — troika entry has expected fields (Bedrock-only, no OpenAI key)"
+check_troika_field() {
+  local field="$1" expected="$2"
+  local got
+  got=$(jq -r --arg f "$field" '.packs.troika[$f]' "$SB/packs/registry.json")
+  if [[ "$got" == "$expected" ]]; then
+    pass "troika.$field = $expected"
+  else
+    fail "troika.$field expected '$expected' got '$got'"
+  fi
+}
+check_troika_field type agent
+check_troika_field default_model "us.anthropic.claude-sonnet-4-6"
+check_troika_field experimental true
+check_troika_field instance_type "t4g.xlarge"
+check_troika_field data_volume_gb 80
+check_troika_field brain true
+check_troika_field claude_code false
+# requires_openai_key=false must be literal JSON false (jq -r returns 'false', not 'null')
+_tri_req_oai=$(jq -r '.packs.troika.requires_openai_key' "$SB/packs/registry.json")
+if [[ "$_tri_req_oai" == "false" ]]; then
+  pass "troika.requires_openai_key = false"
+else
+  fail "troika.requires_openai_key expected 'false' got '$_tri_req_oai'"
+fi
+# deps order: bedrockify → openclaw → claude-code → codex-cli
+_tri_deps=$(jq -c '.packs.troika.deps' "$SB/packs/registry.json")
+if [[ "$_tri_deps" == '["bedrockify","openclaw","claude-code","codex-cli"]' ]]; then
+  pass "troika.deps order correct (bedrockify→openclaw→claude-code→codex-cli)"
+else
+  fail "troika.deps wrong: got $_tri_deps"
+fi
+# compatible_profiles=[builder]
+_tri_profiles=$(jq -c '.packs.troika.compatible_profiles' "$SB/packs/registry.json")
+if [[ "$_tri_profiles" == '["builder"]' ]]; then
+  pass "troika.compatible_profiles = [builder]"
+else
+  fail "troika.compatible_profiles wrong: got $_tri_profiles"
+fi
+# ports.gateway=3001
+_tri_gw=$(jq -r '.packs.troika.ports.gateway' "$SB/packs/registry.json")
+if [[ "$_tri_gw" == "3001" ]]; then
+  pass "troika.ports.gateway = 3001"
+else
+  fail "troika.ports.gateway expected '3001' got '$_tri_gw'"
+fi
+
 # ── Test 9: YAML → JSON data equality (deep compare) ─────────────────────────
 header "Test 9 — YAML and JSON represent identical data (deep equality)"
 RESULT=$(python3 <<PY

@@ -102,6 +102,30 @@
       "compatible_profiles": [
         "builder"
       ]
+    },
+    "troika": {
+      "type": "agent",
+      "description": "Troika — mixture of harnesses: OpenClaw + Claude Code + Codex CLI on one instance, all via Bedrock",
+      "deps": [
+        "bedrockify",
+        "openclaw",
+        "claude-code",
+        "codex-cli"
+      ],
+      "instance_type": "t4g.xlarge",
+      "root_volume_gb": 40,
+      "data_volume_gb": 80,
+      "default_model": "us.anthropic.claude-sonnet-4-6",
+      "ports": {
+        "gateway": 3001
+      },
+      "brain": true,
+      "claude_code": false,
+      "experimental": true,
+      "requires_openai_key": false,
+      "compatible_profiles": [
+        "builder"
+      ]
     }
   }
 }
