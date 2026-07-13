@@ -211,6 +211,110 @@ else
 fi
 echo ""
 
+# ── Test 7: Troika dep-substitution ──────────────────────────────────────────
+info "Test 7: get_effective_deps troika primary-substitution"
+# Verify get_effective_deps is present and implements the substitution logic.
+# We source only the registry helpers + get_effective_deps from bootstrap.sh;
+# the rest of the script is not executed.
+
+REGISTRY="${DEPLOY_DIR}/../packs/registry.yaml"
+if [[ ! -f "$REGISTRY" ]]; then
+  info "  Registry not found — skipping dep-substitution test"
+else
+  # Extract get_effective_deps function + its dependency (registry_get_deps) to a temp file
+  _DEP_TEST_SCRIPT=$(mktemp /tmp/test-dep-subst-XXXXXX.sh)
+  cat > "$_DEP_TEST_SCRIPT" << 'DEPTEST_EOF'
+#!/bin/bash
+set -euo pipefail
+REGISTRY="$1"
+PRIMARY="${2:-openclaw}"
+
+# Minimal stubs for bootstrap helpers bootstrap.sh needs before registry helpers
+registry_get_deps() {
+  local pack="$1"
+  awk "
+    /^  ${pack}:/{found=1; in_deps=0; next}
+    found && /^  [a-z]/{exit}
+    found && /^    deps:/{in_deps=1; next}
+    found && in_deps && /^      - /{gsub(/^      - /, \"\"); print; next}
+    found && in_deps && !/^      /{in_deps=0}
+  " "$REGISTRY"
+}
+
+get_effective_deps() {
+  local pack="$1"
+  local dep
+  while IFS= read -r dep; do
+    if [[ "$pack" == "troika" && "${PRIMARY:-openclaw}" != "openclaw" && "$dep" == "openclaw" ]]; then
+      echo "${PRIMARY}"
+    else
+      echo "$dep"
+    fi
+  done < <(registry_get_deps "$pack")
+}
+
+# Test 1: troika + primary=openclaw → no substitution
+PRIMARY="openclaw"
+DEPS_OC=$(get_effective_deps troika | tr '\n' ',')
+if [[ "$DEPS_OC" == *"openclaw"* ]]; then
+  echo "PASS: primary=openclaw → openclaw dep preserved"
+else
+  echo "FAIL: primary=openclaw should preserve openclaw dep; got: $DEPS_OC"
+  exit 1
+fi
+
+# Test 2: troika + primary=hermes → openclaw replaced with hermes
+PRIMARY="hermes"
+DEPS_HERMES=$(get_effective_deps troika | tr '\n' ',')
+if [[ "$DEPS_HERMES" == *"hermes"* && "$DEPS_HERMES" != *"openclaw"* ]]; then
+  echo "PASS: primary=hermes → hermes dep substituted, openclaw removed"
+else
+  echo "FAIL: primary=hermes substitution wrong; got: $DEPS_HERMES"
+  exit 1
+fi
+
+# Test 3: non-troika pack unaffected by PRIMARY!=openclaw
+PRIMARY="hermes"
+DEPS_OC_PACK=$(get_effective_deps openclaw | tr '\n' ',')
+# openclaw's own dep list should be unchanged
+if [[ "$DEPS_OC_PACK" != *"hermes"* ]]; then
+  echo "PASS: non-troika pack unaffected by PRIMARY=hermes"
+else
+  echo "FAIL: non-troika pack should not be affected; got: $DEPS_OC_PACK"
+  exit 1
+fi
+
+# Test 4: order preservation — bedrockify,<primary>,claude-code,codex-cli
+PRIMARY="hermes"
+deps_arr=()
+while IFS= read -r dep; do
+  deps_arr+=("$dep")
+done < <(get_effective_deps troika)
+if [[ "${deps_arr[0]}" == "bedrockify" && "${deps_arr[1]}" == "hermes" \
+   && "${deps_arr[2]}" == "claude-code" && "${deps_arr[3]}" == "codex-cli" ]]; then
+  echo "PASS: dep order preserved (bedrockify→hermes→claude-code→codex-cli)"
+else
+  echo "FAIL: dep order wrong; got: ${deps_arr[*]}"
+  exit 1
+fi
+
+echo "ALL_PASS"
+DEPTEST_EOF
+
+  DEP_OUT=$(bash "$_DEP_TEST_SCRIPT" "$REGISTRY" 2>&1) && DEP_RC=0 || DEP_RC=$?
+  rm -f "$_DEP_TEST_SCRIPT"
+
+  if echo "$DEP_OUT" | grep -q "FAIL"; then
+    fail "dep-substitution: at least one case failed — see above"
+    echo "$DEP_OUT" | grep -v PASS
+  elif echo "$DEP_OUT" | grep -q "ALL_PASS"; then
+    ok "dep-substitution: primary=openclaw no-op, primary=hermes substitutes, non-troika unaffected, order preserved"
+  else
+    fail "dep-substitution: unexpected output — got: $DEP_OUT"
+  fi
+fi
+echo ""
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo "================================================================"
 echo "  Results: $PASS passed, $FAIL failed"

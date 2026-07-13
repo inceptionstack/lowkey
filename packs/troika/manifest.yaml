@@ -1,0 +1,49 @@
+name: troika
+version: "1.0.0"
+type: agent
+description: "Troika — mixture of harnesses: OpenClaw/Hermes + Claude Code + Codex CLI on one instance, all via Bedrock"
+
+deps:
+  - bedrockify
+  - openclaw
+  - claude-code
+  - codex-cli
+
+requirements:
+  arch:
+    - arm64
+    - amd64
+  os:
+    - al2023
+    - ubuntu2204
+  min_instance_type: t4g.xlarge
+
+params:
+  - name: primary
+    description: "OpenClaw-family first horse (openclaw | hermes; default openclaw)"
+    default: "openclaw"
+  - name: daily-driver
+    description: "Agent to auto-launch on SSM login (primary | claude-code | codex-cli | none; default follows primary)"
+    default: ""
+  - name: model
+    description: "Bedrock model ID for Claude-family agents (OpenClaw + Claude Code)"
+    default: "us.anthropic.claude-sonnet-4-6"
+  - name: codex-model
+    description: "Bedrock Mantle model ID for Codex CLI"
+    default: "openai.gpt-5.5"
+  - name: region
+    description: "AWS region for Bedrock"
+    default: "us-east-1"
+
+health_check:
+  command: "openclaw --version && claude --version && codex --version"
+  timeout: 30
+
+provides:
+  commands:
+    - openclaw
+    - claude
+    - codex
+    - agents
+  services:
+    - openclaw-gateway

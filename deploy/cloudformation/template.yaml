@@ -26,6 +26,9 @@ Metadata:
           - KiroFromSecret
           - TelegramBotTokenSecret
           - TelegramUser
+          - Primary
+          - DailyDriver
+          - CodexModel
           - RequestQuotaIncreases
       - Label:
           default: "🛡️ Security Services"
@@ -124,7 +127,8 @@ Parameters:
       - kiro-cli
       - codex-cli
       - roundhouse
-    Description: "Agent pack to deploy. 'openclaw' is the stateful AI agent with 24/7 gateway (recommended). 'roundhouse' is the pi-based agent with Telegram. 'hermes' is the NousResearch CLI agent (lighter). 'kiro-cli' and 'codex-cli' are experimental."
+      - troika
+    Description: "Agent pack to deploy. 'openclaw' is the stateful AI agent with 24/7 gateway (recommended). 'roundhouse' is the pi-based agent with Telegram. 'hermes' is the NousResearch CLI agent (lighter). 'kiro-cli' and 'codex-cli' are experimental. 'troika' installs OpenClaw/Hermes + Claude Code + Codex CLI on one instance (experimental)."
 
   ProfileName:
     Type: String
@@ -263,6 +267,24 @@ Parameters:
     Type: String
     Default: ''
     Description: "Telegram username for bot pairing (roundhouse pack only, without @ prefix)."
+
+  Primary:
+    Type: String
+    Default: openclaw
+    AllowedValues:
+      - openclaw
+      - hermes
+    Description: "Troika pack only: the OpenClaw-family first horse (openclaw or hermes). Ignored for other packs."
+
+  DailyDriver:
+    Type: String
+    Default: ''
+    Description: "Troika pack only: agent to auto-launch when you SSM into the instance (openclaw, hermes, claude-code, codex-cli, none; default=primary). Ignored for other packs."
+
+  CodexModel:
+    Type: String
+    Default: 'openai.gpt-5.5'
+    Description: "Troika pack only: Bedrock Mantle model ID for Codex CLI. Ignored for other packs."
 
   EnableBedrockForm:
     Type: String
@@ -1143,7 +1165,10 @@ Resources:
             --provider-api-key "$PROVIDER_API_KEY" \
             --kiro-from-secret "$KIRO_FROM_SECRET" \
             --telegram-bot-token-secret "$TELEGRAM_BOT_TOKEN_SECRET" \
-            --telegram-user "$TELEGRAM_USER"
+            --telegram-user "$TELEGRAM_USER" \
+            --primary "${Primary}" \
+            --daily-driver "${DailyDriver}" \
+            --codex-model "${CodexModel}"
           # Signal CFN success — defense-in-depth: bootstrap.sh also signals,
           # but this catches edge cases where bootstrap.sh signal fails silently.
           # CFN ignores duplicate signals, so double-fire is safe.

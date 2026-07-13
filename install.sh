@@ -657,6 +657,9 @@ _TELEM_LIB_READY=1
 AUTO_YES=false
 PRESELECT_PACK=""
 PRESELECT_METHOD=""
+TROIKA_PRIMARY=""      # --primary flag: first horse (openclaw | hermes)
+TROIKA_DAILY_DRIVER="" # --daily-driver flag: auto-launch agent
+TROIKA_CODEX_MODEL=""  # --codex-model flag: Bedrock model for Codex CLI
 PRESELECT_PROFILE=""
 INSTALL_MODE=""  # "simple" or "advanced", empty = ask
 DEBUG_IN_REPO=false
@@ -713,6 +716,24 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       TELEGRAM_USER="$2"; shift 2 ;;
+    --primary)
+      if [[ $# -lt 2 || "$2" == --* ]]; then
+        echo -e "\033[0;31m✗\033[0m --primary requires a value (openclaw, hermes)" >&2
+        exit 1
+      fi
+      TROIKA_PRIMARY="$2"; shift 2 ;;
+    --daily-driver)
+      if [[ $# -lt 2 || "$2" == --* ]]; then
+        echo -e "\033[0;31m✗\033[0m --daily-driver requires a value (openclaw, hermes, claude-code, codex-cli, none)" >&2
+        exit 1
+      fi
+      TROIKA_DAILY_DRIVER="$2"; shift 2 ;;
+    --codex-model)
+      if [[ $# -lt 2 || "$2" == --* ]]; then
+        echo -e "\033[0;31m✗\033[0m --codex-model requires a Bedrock model ID" >&2
+        exit 1
+      fi
+      TROIKA_CODEX_MODEL="$2"; shift 2 ;;
     --debug-in-repo) DEBUG_IN_REPO=true; shift ;;
     --test|--dry-run) TEST_MODE=true; shift ;;
     --auto-rename-account-enabled) AUTO_RENAME_ACCOUNT=true; shift ;;
@@ -728,10 +749,17 @@ Options:
   --simple                       Force simple install mode
   --advanced                     Force advanced install mode
   --pack <name>                  Agent pack (openclaw, claude-code, codex-cli,
-                                 kiro-cli, hermes, roundhouse)
+                                 kiro-cli, hermes, roundhouse, troika)
   --profile <name>               Permission profile (builder,
                                  account_assistant, personal_assistant)
   --method <cfn>                 Deploy method (default: cfn)
+  --primary <name>               Troika: first horse (openclaw | hermes;
+                                 default openclaw)
+  --daily-driver <name>          Troika: agent to auto-launch on SSM login
+                                 (<primary> | claude-code | codex-cli | none;
+                                 default = primary)
+  --codex-model <id>             Troika: Bedrock Mantle model for Codex CLI
+                                 (default openai.gpt-5.5)
   --kiro-from-secret <id|arn>    Secrets Manager id/arn for Kiro API key
                                  (kiro-cli headless mode)
   --telegram-bot-token <token>  Telegram bot token (roundhouse pack;
@@ -1394,6 +1422,17 @@ check_bedrock_access() {
     echo -e "    ${DIM}$(echo "$invoke_err" | head -1)${NC}"
     _bedrock_access_guidance "$probe_region"
   fi
+
+  # Phase 5: Troika Codex (Bedrock Mantle) model probe — non-fatal, independent
+  # of the Sonnet result above. BEDROCK_ACCESS_OK tracks Sonnet only.
+  # PACK_NAME is not yet resolved at preflight time (pack selection runs later);
+  # detect troika early via PRESELECT_PACK (--pack flag) or TROIKA_CODEX_MODEL
+  # (--codex-model flag).
+  if [[ "${PACK_NAME:-}" == "troika" ]] \
+     || [[ "${PRESELECT_PACK:-}" == "troika" ]] \
+     || [[ -n "${TROIKA_CODEX_MODEL:-}" ]]; then
+    _check_codex_model_access "${TROIKA_CODEX_MODEL:-openai.gpt-5.5}" "$probe_region"
+  fi
 }
 
 _bedrock_access_guidance() {
@@ -1416,6 +1455,61 @@ _bedrock_access_guidance() {
   echo "  https://${probe_region}.console.aws.amazon.com/bedrock/home?region=${probe_region}#/modelaccess"
   echo ""
   confirm_or_abort "Continue with the install anyway?" "default_yes"
+}
+
+# Phase 5: Probe Bedrock Mantle (openai.*) model access for Troika's Codex CLI.
+# Mantle models use the OpenAI-compatible Responses API, NOT bedrock-runtime
+# converse — attempt converse first; fall back to list-foundation-models grep
+# for openai.* ids. Non-fatal: warns and lets the install continue.
+_check_codex_model_access() {
+  local codex_model="$1"
+  local probe_region="$2"
+
+  echo ""
+  info "Checking Codex (Bedrock Mantle) model access: ${codex_model} @ ${probe_region}..."
+
+  # Attempt 1: converse — Mantle models likely return UnsupportedOperationException
+  # (they use the OpenAI-compatible Responses API path, not converse). We try
+  # anyway because the error response is informative and throttle = access OK.
+  local codex_err=""
+  if codex_err=$(aws bedrock-runtime converse \
+      --model-id "$codex_model" \
+      --messages '[{"role":"user","content":[{"text":"ping"}]}]' \
+      --inference-config '{"maxTokens":1}' \
+      --region "$probe_region" 2>&1 >/dev/null); then
+    ok "Codex Mantle model verified via converse (${codex_model})"
+    return 0
+  elif grep -qiE "ThrottlingException|TooManyRequests|ServiceQuotaExceeded" <<<"$codex_err"; then
+    ok "Codex Mantle model access verified (throttled — access is enabled)"
+    return 0
+  fi
+
+  # Attempt 2: list-foundation-models grep for openai.* ids.
+  # Confirms Bedrock Mantle is visible/available in this region + account,
+  # even if converse is unsupported for Mantle model IDs.
+  local openai_ids=""
+  openai_ids=$(aws bedrock list-foundation-models \
+    --region "$probe_region" \
+    --query "modelSummaries[?contains(modelId, 'openai')]" \
+    --output text 2>/dev/null || true)
+
+  if [[ -n "$openai_ids" ]]; then
+    ok "Bedrock Mantle models visible (openai.* ids found in ${probe_region})"
+    info "Codex CLI uses the OpenAI-compatible Responses API — converse probe does not apply."
+  else
+    warn "Codex Mantle model '${codex_model}' may not be accessible in ${probe_region}."
+    echo -e "    ${DIM}$(echo "$codex_err" | head -1)${NC}"
+    echo ""
+    echo "  Troika's Codex CLI uses Amazon Bedrock Mantle (openai.* model IDs)."
+    echo "  Bedrock Mantle access is separate from Anthropic model access."
+    echo "  Enable Mantle model access (if available to your account):"
+    echo "  https://${probe_region}.console.aws.amazon.com/bedrock/home?region=${probe_region}#/modelaccess"
+    echo ""
+    echo "  Note: Bedrock Mantle is region-limited; us-east-1 is the recommended region."
+    echo "  The install will continue — Codex will not function until access is enabled."
+    echo ""
+    # Non-fatal: no confirm_or_abort (user already saw Sonnet warning if applicable)
+  fi
 }
 
 check_vpc_quota() {
@@ -1785,11 +1879,38 @@ choose_pack() {
   ok "Agent: ${PACK_NAME}"
 }
 
-# Check pack/profile compatibility
+# Check pack/profile compatibility against registry compatible_profiles.
+# When a pack declares compatible_profiles, auto-selects the first allowed
+# profile (or fails fast when --profile was explicit). No-op for packs with
+# no restriction (most packs).
 check_pack_profile_compat() {
-  # No pack-specific profile restrictions at present. Packs may declare
-  # compatible_profiles in packs/registry.yaml; add enforcement here if needed.
-  :
+  local registry="$_PACK_REGISTRY"
+  [[ -z "$registry" || ! -f "$registry" ]] && return 0
+
+  local compat_profiles
+  compat_profiles=$(jq -r --arg p "$PACK_NAME" '.packs[$p].compatible_profiles // [] | .[]' "$registry" 2>/dev/null || true)
+  [[ -z "$compat_profiles" ]] && return 0  # no restriction
+
+  local profile_ok=false
+  while IFS= read -r cp; do
+    [[ "$PROFILE_NAME" == "$cp" ]] && profile_ok=true && break
+  done <<< "$compat_profiles"
+
+  [[ "$profile_ok" == "true" ]] && return 0
+
+  local allowed_list
+  allowed_list=$(printf '%s' "$compat_profiles" | tr '\n' ',' | sed 's/,$//')
+
+  if [[ -n "${PRESELECT_PROFILE:-}" ]]; then
+    fail "Pack '${PACK_NAME}' requires profile in [${allowed_list}]. Got --profile '${PRESELECT_PROFILE}'."
+  fi
+
+  # Interactive selection was outside allowed set — auto-correct to first allowed profile
+  local first_compat
+  first_compat=$(printf '%s' "$compat_profiles" | head -1)
+  info "${PACK_NAME} is restricted to [${allowed_list}] profile(s) — auto-selecting '${first_compat}'"
+  PROFILE_NAME="$first_compat"
+  ok "Profile: ${PROFILE_NAME}"
 }
 
 # ============================================================================
@@ -1816,6 +1937,25 @@ collect_config_simple() {
     personal_assistant) INSTANCE_TYPE="t4g.medium" ;;
     *)                  INSTANCE_TYPE="t4g.xlarge" ;;
   esac
+
+  # Pack minimum (§12.4): enforce registry instance_type as floor so a pack that
+  # requires a larger instance isn't silently under-provisioned in simple mode.
+  if [[ -n "$registry" && -f "$registry" ]]; then
+    local _sim_pack_min
+    _sim_pack_min=$(jq -r --arg p "$PACK_NAME" '.packs[$p].instance_type // ""' "$registry" 2>/dev/null || echo "")
+    case "$_sim_pack_min" in
+      t4g.xlarge)
+        if [[ "$INSTANCE_TYPE" != "t4g.xlarge" ]]; then
+          INSTANCE_TYPE="t4g.xlarge"
+          info "${PACK_NAME} requires t4g.xlarge minimum (§12.4) — upgrading from profile default"
+        fi ;;
+      t4g.large)
+        if [[ "$INSTANCE_TYPE" == "t4g.medium" ]]; then
+          INSTANCE_TYPE="t4g.large"
+          info "${PACK_NAME} requires t4g.large minimum (§12.4) — upgrading from profile default"
+        fi ;;
+    esac
+  fi
 
   # Environment name: auto-generate
   local existing_count
@@ -1966,7 +2106,7 @@ collect_security_config() {
 # Parameter source-of-truth: single mapping for CFN Console and CFN CLI
 # ============================================================================
 # ⚠ KEEP THESE TWO ARRAYS IN SYNC — same order, same count
-PARAM_CFN_NAMES=(EnvironmentName PackName ProfileName InstanceType DefaultModel ModelMode BedrockRegion LokiWatermark EnableBedrockForm EnableSecurityHub EnableGuardDuty EnableInspector EnableAccessAnalyzer EnableConfigRecorder ExistingVpcId ExistingSubnetId RepoBranch KiroFromSecret TelegramBotTokenSecret TelegramUser)
+PARAM_CFN_NAMES=(EnvironmentName PackName ProfileName InstanceType DefaultModel ModelMode BedrockRegion LokiWatermark EnableBedrockForm EnableSecurityHub EnableGuardDuty EnableInspector EnableAccessAnalyzer EnableConfigRecorder ExistingVpcId ExistingSubnetId RepoBranch KiroFromSecret TelegramBotTokenSecret TelegramUser Primary DailyDriver CodexModel)
 PARAM_VALUES=()  # populated by build_deploy_params()
 
 # Per-pack default model (passed to CFN DefaultModel / bootstrap.sh --model).
@@ -1980,6 +2120,7 @@ pack_default_model() {
     kiro-cli)                 echo "kiro-cloud" ;;  # Kiro uses its own inference; value is informational only
     openclaw)                 echo "us.anthropic.claude-sonnet-4-6" ;;
     claude-code)              echo "us.anthropic.claude-sonnet-4-6" ;;
+    troika)                   echo "us.anthropic.claude-sonnet-4-6" ;;
     # hermes depends on bedrockify; 'model' is the Bedrock id bedrockify
     # proxies to (NOT the Hermes-specific model ID, which is a separate
     # 'hermes-model' param on the pack).
@@ -2020,6 +2161,9 @@ build_deploy_params() {
     "${KIRO_FROM_SECRET:-}"
     "${TELEGRAM_BOT_TOKEN_SECRET:-}"
     "${TELEGRAM_USER:-}"
+    "${TROIKA_PRIMARY:-openclaw}"
+    "${TROIKA_DAILY_DRIVER:-}"
+    "${TROIKA_CODEX_MODEL:-openai.gpt-5.5}"
   )
   # Validate parallel arrays are in sync
   [[ ${#PARAM_CFN_NAMES[@]} -eq ${#PARAM_VALUES[@]} ]] \
@@ -2075,6 +2219,10 @@ show_summary() {
   summary+="Deploy via    ${deploy_method_label}\n"
   summary+="Account       ${ACCOUNT_ID}\n"
   summary+="Agent         ${PACK_NAME}\n"
+  if [[ "${PACK_NAME:-}" == "troika" ]]; then
+    summary+="Primary       ${TROIKA_PRIMARY:-openclaw}\n"
+    summary+="Daily driver  ${TROIKA_DAILY_DRIVER:-${TROIKA_PRIMARY:-openclaw}}\n"
+  fi
   summary+="Profile       ${PROFILE_NAME}\n"
   summary+="Instance      ${INSTANCE_TYPE}\n"
   summary+="Region        ${DEPLOY_REGION}\n"
@@ -2840,6 +2988,63 @@ run_config_and_review() {
       fi
     fi
     # Rebuild params with telegram values now set
+    build_deploy_params
+  fi
+
+  # Pack-specific: Troika primary + daily-driver selection
+  if [[ "${PACK_NAME:-}" == "troika" ]]; then
+    # ── Primary (first horse) ────────────────────────────────────────────────
+    if [[ -z "${TROIKA_PRIMARY:-}" ]]; then
+      if [[ "$AUTO_YES" == true ]]; then
+        TROIKA_PRIMARY="openclaw"
+        ok "Primary (troika): ${TROIKA_PRIMARY} (default)"
+      else
+        local _tri_primary_choice
+        _gum_or_die _tri_primary_choice $GUM choose \
+          --header "Which OpenClaw-family agent is your first horse?" \
+          --selected "openclaw" \
+          "openclaw" \
+          "hermes" || _tri_primary_choice="openclaw"
+        TROIKA_PRIMARY="${_tri_primary_choice:-openclaw}"
+        ok "Primary: ${TROIKA_PRIMARY}"
+      fi
+    else
+      ok "Primary (troika): ${TROIKA_PRIMARY} (pre-selected)"
+    fi
+
+    # ── Daily driver ─────────────────────────────────────────────────────────
+    if [[ -z "${TROIKA_DAILY_DRIVER:-}" ]]; then
+      if [[ "$AUTO_YES" == true ]]; then
+        TROIKA_DAILY_DRIVER="${TROIKA_PRIMARY}"
+        ok "Daily driver (troika): ${TROIKA_DAILY_DRIVER} (default = primary)"
+      else
+        local _tri_dd_choice
+        _gum_or_die _tri_dd_choice $GUM choose \
+          --header "Which agent auto-launches when you SSM in?" \
+          --selected "${TROIKA_PRIMARY}" \
+          "${TROIKA_PRIMARY}" \
+          "claude-code" \
+          "codex-cli" \
+          "none" || _tri_dd_choice="${TROIKA_PRIMARY}"
+        TROIKA_DAILY_DRIVER="${_tri_dd_choice:-${TROIKA_PRIMARY}}"
+        ok "Daily driver: ${TROIKA_DAILY_DRIVER}"
+      fi
+    else
+      ok "Daily driver (troika): ${TROIKA_DAILY_DRIVER} (pre-selected)"
+    fi
+
+    # Cross-validate daily-driver vs primary (catches --daily-driver openclaw --primary hermes)
+    case "${TROIKA_DAILY_DRIVER}" in
+      "${TROIKA_PRIMARY}"|claude-code|codex-cli|none) : ;;
+      *)
+        fail "--daily-driver '${TROIKA_DAILY_DRIVER}' is not valid when --primary='${TROIKA_PRIMARY}'. Valid: ${TROIKA_PRIMARY} | claude-code | codex-cli | none"
+        ;;
+    esac
+
+    # Codex model: default if not pre-set
+    TROIKA_CODEX_MODEL="${TROIKA_CODEX_MODEL:-openai.gpt-5.5}"
+
+    # Rebuild params with troika values now set
     build_deploy_params
   fi
   show_summary || {

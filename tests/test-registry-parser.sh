@@ -66,10 +66,10 @@ get_value() {
 echo "=== Test: real registry.json (agent packs) ==="
 output=$(list_agents "$REGISTRY")
 agent_count=$(echo "$output" | grep -c . || true)
-if [[ "$agent_count" -ge 6 ]]; then
-  echo "  ✓ lists at least 6 agents (found $agent_count)"; PASS=$((PASS + 1))
+if [[ "$agent_count" -ge 7 ]]; then
+  echo "  ✓ lists at least 7 agents (found $agent_count)"; PASS=$((PASS + 1))
 else
-  echo "  ✗ expected at least 6 agents, found $agent_count"; FAIL=$((FAIL + 1))
+  echo "  ✗ expected at least 7 agents, found $agent_count"; FAIL=$((FAIL + 1))
 fi
 assert_contains "includes openclaw" "openclaw|" "$output"
 assert_contains "includes claude-code" "claude-code|" "$output"
@@ -79,6 +79,7 @@ removed_packs=$(echo "$output" | grep -c -E '^(pi|ironclaw|nemoclaw)\|' || true)
 assert_eq "excludes removed packs (pi/ironclaw/nemoclaw)" "0" "$removed_packs"
 bedrockify_as_pack=$(echo "$output" | grep -c '^bedrockify|' || true)
 assert_eq "excludes base packs (bedrockify)" "0" "$bedrockify_as_pack"
+assert_contains "includes troika" "troika|" "$output"
 
 # ---- Test: experimental flag ------------------------------------------------
 echo ""
@@ -87,6 +88,25 @@ assert_contains "openclaw is not experimental" "openclaw|OpenClaw" "$output"
 assert_contains "openclaw experimental=false" "|false" "$(echo "$output" | grep openclaw)"
 assert_contains "hermes is experimental" "|true" "$(echo "$output" | grep '^hermes|')"
 assert_contains "kiro-cli is experimental" "|true" "$(echo "$output" | grep '^kiro-cli|')"
+
+# ---- Test: troika pack fields -----------------------------------------------
+echo ""
+echo "=== Test: troika pack (registry.json) ==="
+assert_eq "troika → t4g.xlarge" "t4g.xlarge" "$(get_value "$REGISTRY" troika instance_type)"
+assert_eq "troika → default_model" "us.anthropic.claude-sonnet-4-6" "$(get_value "$REGISTRY" troika default_model)"
+assert_eq "troika → requires_openai_key=false" "false" "$(jq -r '.packs.troika.requires_openai_key' "$REGISTRY" 2>/dev/null)"
+assert_eq "troika → experimental=true" "true" "$(get_value "$REGISTRY" troika experimental)"
+assert_eq "troika → brain=true" "true" "$(get_value "$REGISTRY" troika brain)"
+assert_eq "troika → root_volume_gb=40" "40" "$(get_value "$REGISTRY" troika root_volume_gb)"
+assert_eq "troika → data_volume_gb=80" "80" "$(get_value "$REGISTRY" troika data_volume_gb)"
+# troika should be listed as experimental
+assert_contains "troika is experimental" "|true" "$(echo "$output" | grep '^troika|')"
+# deps order: bedrockify → openclaw → claude-code → codex-cli
+_troika_deps=$(jq -c '.packs.troika.deps' "$REGISTRY" 2>/dev/null)
+assert_eq "troika → deps order" '["bedrockify","openclaw","claude-code","codex-cli"]' "$_troika_deps"
+# compatible_profiles includes builder
+_troika_profiles=$(jq -c '.packs.troika.compatible_profiles' "$REGISTRY" 2>/dev/null)
+assert_eq "troika → compatible_profiles=[builder]" '["builder"]' "$_troika_profiles"
 
 # ---- Test: instance_type lookup ---------------------------------------------
 echo ""
