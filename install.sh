@@ -749,7 +749,7 @@ Options:
   --simple                       Force simple install mode
   --advanced                     Force advanced install mode
   --pack <name>                  Agent pack (openclaw, claude-code, codex-cli,
-                                 kiro-cli, hermes, roundhouse, troika)
+                                 kiro-cli, hermes, roundhouse, troika, kirocrew)
   --profile <name>               Permission profile (builder,
                                  account_assistant, personal_assistant)
   --method <cfn>                 Deploy method (default: cfn)
@@ -2118,6 +2118,7 @@ pack_default_model() {
   case "$1" in
     codex-cli)                echo "gpt-5.4" ;;
     kiro-cli)                 echo "kiro-cloud" ;;  # Kiro uses its own inference; value is informational only
+    kirocrew)                 echo "kiro-cloud" ;;  # KiroCrew drives kiro-cli over ACP; same inference
     openclaw)                 echo "us.anthropic.claude-sonnet-4-6" ;;
     claude-code)              echo "us.anthropic.claude-sonnet-4-6" ;;
     troika)                   echo "us.anthropic.claude-sonnet-4-6" ;;
