@@ -1782,7 +1782,7 @@ PACK_EXPERIMENTAL=()
 load_pack_registry() {
   _PACK_REGISTRY="${CLONE_DIR:-}/packs/registry.json"
   if [[ ! -f "$_PACK_REGISTRY" ]]; then
-    local registry_url="https://raw.githubusercontent.com/inceptionstack/lowkey/main/packs/registry.json"
+    local registry_url="https://raw.githubusercontent.com/inceptionstack/lowkey/${REPO_BRANCH:-main}/packs/registry.json"
     _PACK_REGISTRY="/tmp/lowkey-registry-$$.json"
     curl -sfL "$registry_url" -o "$_PACK_REGISTRY" 2>/dev/null || _PACK_REGISTRY=""
   fi
