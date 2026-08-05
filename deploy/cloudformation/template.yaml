@@ -128,7 +128,8 @@ Parameters:
       - codex-cli
       - roundhouse
       - troika
-    Description: "Agent pack to deploy. 'openclaw' is the stateful AI agent with 24/7 gateway (recommended). 'roundhouse' is the pi-based agent with Telegram. 'hermes' is the NousResearch CLI agent (lighter). 'kiro-cli' and 'codex-cli' are experimental. 'troika' installs OpenClaw/Hermes + Claude Code + Codex CLI on one instance (experimental)."
+      - kirocrew
+    Description: "Agent pack to deploy. 'openclaw' is the stateful AI agent with 24/7 gateway (recommended). 'roundhouse' is the pi-based agent with Telegram. 'hermes' is the NousResearch CLI agent (lighter). 'kiro-cli' and 'codex-cli' are experimental. 'troika' installs OpenClaw/Hermes + Claude Code + Codex CLI on one instance (experimental). 'kirocrew' is the multi-agent crew gateway on Kiro CLI (experimental)."
 
   ProfileName:
     Type: String

@@ -379,7 +379,7 @@ curl -fsSL "${KIROCREW_INSTALLER_URL}" -o /tmp/install-kirocrew.sh || {
   - CDN: the installer URL may be temporarily unavailable"
 }
 
-if ! sh /tmp/install-kirocrew.sh -- "${KIROCREW_INSTALLER_ARGS[@]}"; then
+if ! sh /tmp/install-kirocrew.sh "${KIROCREW_INSTALLER_ARGS[@]}"; then
   rm -f /tmp/install-kirocrew.sh
   fail "KiroCrew installer failed. Possible causes:
   - Python: ensure ${KIROCREW_PY} is ≥3.10
