@@ -343,12 +343,19 @@ ok "Python for KiroCrew: ${KIROCREW_PY} ($(${KIROCREW_PY} --version 2>&1))"
 step "Ensuring pipx is available"
 
 if ! command -v pipx &>/dev/null; then
-  log "Installing pipx..."
-  "${KIROCREW_PY}" -m pip install --user pipx 2>/dev/null || pip3 install --user pipx 2>/dev/null || true
+  log "Installing pipx using ${KIROCREW_PY}..."
+  "${KIROCREW_PY}" -m pip install --user pipx 2>/dev/null || true
   export PATH="${HOME}/.local/bin:${PATH}"
 fi
 
+# Verify pipx uses the correct Python (>=3.10), not system 3.9
 if command -v pipx &>/dev/null; then
+  PIPX_PY_VERSION="$(pipx --version 2>/dev/null && python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "")"
+  # If pipx is linked to a Python < 3.10, reinstall under the correct interpreter
+  if pipx environment 2>/dev/null | grep -q "python3.9\|Python 3.9"; then
+    log "pipx is running under Python 3.9 — reinstalling under ${KIROCREW_PY}"
+    "${KIROCREW_PY}" -m pip install --user --force-reinstall pipx 2>/dev/null || true
+  fi
   ok "pipx available: $(pipx --version 2>/dev/null || echo unknown)"
 else
   log "pipx not available — upstream installer will use managed venv instead"
@@ -368,6 +375,19 @@ fi
 # Set KIROCREW_HOME if overridden
 if [[ -n "${KIROCREW_HOME_OVERRIDE}" ]]; then
   export KIROCREW_HOME="${KIROCREW_HOME_OVERRIDE}"
+fi
+
+# Ensure the correct Python is first in PATH for the upstream installer
+# The upstream cli.sh uses `python3` — if system python3 is 3.9 but we have 3.11+
+# available, we need to make sure the right one is found first.
+if [[ "${KIROCREW_PY}" != "python3" ]]; then
+  KIROCREW_PY_PATH="$(command -v "${KIROCREW_PY}")"
+  KIROCREW_PY_DIR="$(dirname "${KIROCREW_PY_PATH}")"
+  # Create a temporary symlink so the upstream installer's `python3` resolves correctly
+  mkdir -p /tmp/kirocrew-pybin
+  ln -sf "${KIROCREW_PY_PATH}" /tmp/kirocrew-pybin/python3
+  export PATH="/tmp/kirocrew-pybin:${PATH}"
+  log "Prepended ${KIROCREW_PY} as python3 in PATH for upstream installer"
 fi
 
 log "Running: curl -fsSL ${KIROCREW_INSTALLER_URL} | sh -s -- ${KIROCREW_INSTALLER_ARGS[*]}"
