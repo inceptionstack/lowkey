@@ -1,0 +1,36 @@
+[Unit]
+Description=KiroCrew Gateway (multi-agent crew server)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+Group=ec2-user
+Environment=KIROCREW_PORT=__PORT__
+Environment=KIROCREW_HOME=__HOME__
+Environment=PATH=/home/ec2-user/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Source ~/.kiro/env for KIRO_API_KEY (headless mode). Wrapping in bash
+# because systemd EnvironmentFile doesn't support 'export' prefix syntax.
+ExecStart=/bin/bash -c 'if [[ -f /home/ec2-user/.kiro/env ]]; then source /home/ec2-user/.kiro/env; fi && exec __BINPATH__ gateway'
+Restart=on-failure
+RestartSec=5
+# Embedding model download can take minutes on first start
+TimeoutStartSec=300
+# Graceful shutdown
+TimeoutStopSec=30
+KillSignal=SIGINT
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+# Covers ~/.kiro/crew (data home), ~/.kiro/settings, ~/.kiro/agents, ~/.kiro/env
+# that kiro-cli subprocesses (spawned via ACP) may write to.
+ReadWritePaths=/home/ec2-user/.kiro
+ReadWritePaths=/home/ec2-user/.local
+ReadWritePaths=__HOME__
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
