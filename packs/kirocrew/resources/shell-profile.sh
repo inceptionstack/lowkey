@@ -22,9 +22,10 @@ alias crew-setup="kirocrew setup"
 PACK_BANNER_NAME="KiroCrew Agent Environment"
 PACK_BANNER_EMOJI="🚀"
 PACK_BANNER_COMMANDS='
-  kirocrew gateway                 → Start crew gateway (http://localhost:${KIROCREW_PORT:-5476})
+  kirocrew gateway                 → Start crew gateway (http://localhost:5476)
   kirocrew doctor                  → Verify setup (kiro-cli, auth, MCP, embeddings)
   kirocrew setup                   → Interactive config wizard
+  kirocrew token --ttl 2h          → Generate dashboard login token
   kiro-cli                         → Kiro CLI (single agent, direct)
   kiro-cli --no-interactive "p"    → One-shot headless
 '

@@ -621,6 +621,25 @@ fi
 # ── Post-install notice ───────────────────────────────────────────────────────
 step "Post-install notice"
 
+# Resolve public IP via EC2 IMDS for the gateway URL
+KIROCREW_PUBLIC_IP="$(curl -sf --connect-timeout 2 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo "")"
+if [[ -z "${KIROCREW_PUBLIC_IP}" ]]; then
+  # Try IMDSv2
+  IMDS_TOKEN="$(curl -sf --connect-timeout 2 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 30' http://169.254.169.254/latest/api/token 2>/dev/null || echo "")"
+  if [[ -n "${IMDS_TOKEN}" ]]; then
+    KIROCREW_PUBLIC_IP="$(curl -sf -H "X-aws-ec2-metadata-token: ${IMDS_TOKEN}" http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo "")"
+  fi
+fi
+KIROCREW_HOST="${KIROCREW_PUBLIC_IP:-<this-host>}"
+
+# Generate a dashboard login token (non-fatal if kirocrew isn't fully configured yet)
+KIROCREW_DASH_TOKEN=""
+if command -v kirocrew &>/dev/null; then
+  KIROCREW_DASH_TOKEN="$(kirocrew token --ttl 24h 2>/dev/null || echo "")" 
+fi
+
+KIROCREW_URL="http://${KIROCREW_HOST}:${GATEWAY_PORT}"
+
 if [[ "${START_GATEWAY}" == "true" ]]; then
   cat <<NOTICE
 
@@ -628,12 +647,22 @@ if [[ "${START_GATEWAY}" == "true" ]]; then
   [KIROCREW] GATEWAY RUNNING
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  Dashboard: http://<this-host>:${GATEWAY_PORT}
+  Dashboard: ${KIROCREW_URL}
+NOTICE
+
+  if [[ -n "${KIROCREW_DASH_TOKEN}" ]]; then
+    cat <<NOTICE
+  Login:     ${KIROCREW_URL}/?token=${KIROCREW_DASH_TOKEN}
+             (valid for 24 hours)
+NOTICE
+  fi
+
+  cat <<NOTICE
 
   Commands:
     kirocrew doctor              → Verify setup
     kirocrew setup               → Reconfigure
-    systemctl status kirocrew-gateway  → Service status
+    kirocrew token --ttl 2h      → Generate new login token\n    systemctl status kirocrew-gateway  → Service status
     journalctl -u kirocrew-gateway -f  → Logs
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -648,6 +677,9 @@ else
   kirocrew gateway               → Start server (port ${GATEWAY_PORT})
   kirocrew doctor                → Verify setup
   kirocrew setup                 → Interactive config wizard
+  kirocrew token --ttl 2h        → Generate login token
+
+  Access: ${KIROCREW_URL} (after starting gateway)
 
   To enable as service:
     sudo systemctl enable --now kirocrew-gateway.service

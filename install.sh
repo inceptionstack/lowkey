@@ -2661,6 +2661,15 @@ show_complete() {
   local next_block=""
   next_block+="Connect to your agent:\n\n"
   next_block+="  ${ssm_cmd}\n\n"
+
+  # KiroCrew-specific: show dashboard URL with public IP
+  if [[ "${PACK_NAME}" == "kirocrew" && -n "${PUBLIC_IP}" ]]; then
+    next_block+="Dashboard:\n"
+    next_block+="  http://${PUBLIC_IP}:5476\n\n"
+    next_block+="Generate login token (run on instance):\n"
+    next_block+="  kirocrew token --ttl 24h\n\n"
+  fi
+
   next_block+="Then run:\n"
   while IFS= read -r line; do
     [[ -n "$line" ]] && next_block+="  ${line}\n"
