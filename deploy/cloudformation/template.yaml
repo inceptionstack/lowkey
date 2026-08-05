@@ -382,6 +382,7 @@ Conditions:
   IsPersonalAssistant: !Equals [!Ref ProfileName, 'personal_assistant']
   RunSecurityServices: !Not [!Condition IsPersonalAssistant]
   RunBedrockForm: !Equals [!Ref EnableBedrockForm, 'true']
+  IsKiroCrew: !Equals [!Ref PackName, 'kirocrew']
 
 # ============================================================================
 # RESOURCES
@@ -495,6 +496,14 @@ Resources:
           ToPort: 22
           CidrIp: !Ref SSHAllowedCidr
           Description: SSH access
+        - !If
+          - IsKiroCrew
+          - IpProtocol: tcp
+            FromPort: 5476
+            ToPort: 5476
+            CidrIp: '0.0.0.0/0'
+            Description: KiroCrew gateway dashboard
+          - !Ref 'AWS::NoValue'
       SecurityGroupEgress:
         - IpProtocol: '-1'
           CidrIp: '0.0.0.0/0'
