@@ -64,7 +64,7 @@ _TELEM_CURRENT_STEP="init"
 
 REPO_URL="https://github.com/inceptionstack/lowkey.git"
 DOCS_URL="https://github.com/inceptionstack/lowkey/wiki"
-TEMPLATE_RAW_URL="https://raw.githubusercontent.com/inceptionstack/lowkey/main/deploy/cloudformation/template.yaml"
+TEMPLATE_RAW_URL="https://raw.githubusercontent.com/inceptionstack/lowkey/${REPO_BRANCH:-main}/deploy/cloudformation/template.yaml"
 SSM_DOC_NAME=""
 INSTALLER_VERSION="0.5.197"
 
@@ -2290,7 +2290,7 @@ prepare_repo() {
       fi
     else
       rm -rf "$CLONE_DIR" 2>/dev/null || true
-      run_or_fail "Cloning repository" git clone --depth 1 "$REPO_URL" "$CLONE_DIR"
+      run_or_fail "Cloning repository" git clone --depth 1 -b "${REPO_BRANCH:-main}" "$REPO_URL" "$CLONE_DIR"
     fi
 
     cd "$CLONE_DIR"
