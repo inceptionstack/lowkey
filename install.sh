@@ -64,7 +64,12 @@ _TELEM_CURRENT_STEP="init"
 
 REPO_URL="https://github.com/inceptionstack/lowkey.git"
 DOCS_URL="https://github.com/inceptionstack/lowkey/wiki"
-TEMPLATE_RAW_URL="https://raw.githubusercontent.com/inceptionstack/lowkey/${REPO_BRANCH:-main}/deploy/cloudformation/template.yaml"
+# Template URL deferred: REPO_BRANCH may not be set yet at this point (set later
+# during branch detection around line ~817). We use a function to resolve at call time.
+TEMPLATE_RAW_URL=""  # populated by get_template_url()
+get_template_url() {
+  echo "https://raw.githubusercontent.com/inceptionstack/lowkey/${REPO_BRANCH:-main}/deploy/cloudformation/template.yaml"
+}
 SSM_DOC_NAME=""
 INSTALLER_VERSION="0.5.197"
 
@@ -2314,6 +2319,7 @@ deploy_console() {
   create_s3_bucket "$bucket" "$DEPLOY_REGION"
 
   local tmp; tmp=$(mktemp /tmp/lowkey-cfn-template.XXXXXX.yaml)
+  TEMPLATE_RAW_URL="$(get_template_url)"
   run_or_fail "Downloading template" curl -sfL "$TEMPLATE_RAW_URL" -o "$tmp"
   rm -f "$_RUN_LOG"
 

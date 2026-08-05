@@ -587,14 +587,17 @@ if [[ "${START_GATEWAY}" == "true" ]]; then
     rm -f /tmp/kirocrew-gateway.service
     sudo systemctl daemon-reload
     sudo systemctl enable kirocrew-gateway.service
-    sudo systemctl start kirocrew-gateway.service
-
-    # Verify
-    sleep 2
-    if systemctl is-active --quiet kirocrew-gateway.service; then
-      ok "kirocrew-gateway.service started on port ${GATEWAY_PORT}"
+    if sudo systemctl start kirocrew-gateway.service; then
+      # Verify
+      sleep 2
+      if systemctl is-active --quiet kirocrew-gateway.service; then
+        ok "kirocrew-gateway.service started on port ${GATEWAY_PORT}"
+      else
+        warn "kirocrew-gateway.service enabled but not active — check: journalctl -u kirocrew-gateway"
+      fi
     else
       warn "kirocrew-gateway.service failed to start — check: journalctl -u kirocrew-gateway"
+      warn "Service is enabled and will retry on next boot. Run 'kirocrew doctor' to diagnose."
     fi
   fi
 
