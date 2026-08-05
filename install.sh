@@ -550,7 +550,7 @@ _telem_pack() {
   case "$v" in
     builder|personal-assistant|account-assistant|essential|optional\
     |personal_assistant|account_assistant|openclaw|claude-code|codex-cli\
-    |kiro-cli|hermes|roundhouse)
+    |kiro-cli|hermes|roundhouse|kirocrew)
       printf '%s' "$v" ;;
   esac
 }
