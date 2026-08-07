@@ -10,6 +10,7 @@ Group=ec2-user
 Environment=KIROCREW_PORT=__PORT__
 Environment=KIROCREW_HOME=__HOME__
 Environment=KIROCREW_HOST=0.0.0.0
+Environment=KIROCREW_BIND=0.0.0.0
 Environment=PATH=/home/ec2-user/.local/bin:/usr/local/bin:/usr/bin:/bin
 # Source ~/.kiro/env for KIRO_API_KEY (headless mode). Wrapping in bash
 # because systemd EnvironmentFile doesn't support 'export' prefix syntax.
