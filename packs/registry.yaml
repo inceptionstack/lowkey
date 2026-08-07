@@ -119,3 +119,16 @@ packs:
     requires_openai_key: false
     compatible_profiles:
       - builder
+
+  kirocrew:
+    type: agent
+    description: "KiroCrew — multi-agent crew gateway on Kiro CLI (ACP) with dashboard and semantic memory"
+    deps: []
+    instance_type: t4g.medium
+    root_volume_gb: 40
+    data_volume_gb: 0
+    ports:
+      gateway: 5476
+    brain: false
+    claude_code: false
+    experimental: true

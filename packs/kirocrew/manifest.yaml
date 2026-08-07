@@ -1,0 +1,58 @@
+name: kirocrew
+version: "1.0.0"
+type: agent
+description: "KiroCrew — multi-agent crew gateway on Kiro CLI (ACP) with dashboard, semantic memory, and MCP"
+
+deps: []
+
+requirements:
+  arch:
+    - arm64
+    - amd64
+  os:
+    - al2023
+    - ubuntu2204
+  min_instance_type: t4g.medium
+
+params:
+  - name: region
+    description: "AWS region (informational; Kiro uses its own cloud inference)"
+    default: us-east-1
+  - name: from-secret
+    description: "AWS Secrets Manager secret id/arn for Kiro API key (headless mode)"
+    default: ""
+  - name: channel
+    description: "KiroCrew release channel (stable | nightly | insider)"
+    default: "stable"
+  - name: kirocrew-version
+    description: "Pin KiroCrew to a specific version (leave empty for latest in channel)"
+    default: ""
+  - name: extras
+    description: "Comma-separated pip extras to install after wheel (voice, aws)"
+    default: "aws,voice"
+  - name: gateway-port
+    description: "Port for the KiroCrew gateway (env: KIROCREW_PORT)"
+    default: "5476"
+  - name: start-gateway
+    description: "Install and enable kirocrew-gateway systemd service (true|false)"
+    default: "true"
+  - name: kirocrew-home
+    description: "Override KiroCrew data home (env: KIROCREW_HOME)"
+    default: ""
+
+health_check:
+  command: "kiro-cli --version && kirocrew --version"
+  timeout: 15
+
+provides:
+  commands:
+    - kiro-cli
+    - kirocrew
+  services:
+    - kirocrew-gateway
+
+instance_type: t4g.medium
+root_volume_gb: 40
+data_volume_gb: 0
+
+experimental: true

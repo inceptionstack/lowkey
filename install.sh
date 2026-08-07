@@ -64,7 +64,12 @@ _TELEM_CURRENT_STEP="init"
 
 REPO_URL="https://github.com/inceptionstack/lowkey.git"
 DOCS_URL="https://github.com/inceptionstack/lowkey/wiki"
-TEMPLATE_RAW_URL="https://raw.githubusercontent.com/inceptionstack/lowkey/main/deploy/cloudformation/template.yaml"
+# Template URL deferred: REPO_BRANCH may not be set yet at this point (set later
+# during branch detection around line ~817). We use a function to resolve at call time.
+TEMPLATE_RAW_URL=""  # populated by get_template_url()
+get_template_url() {
+  echo "https://raw.githubusercontent.com/inceptionstack/lowkey/${REPO_BRANCH:-main}/deploy/cloudformation/template.yaml"
+}
 SSM_DOC_NAME=""
 INSTALLER_VERSION="0.5.197"
 
@@ -550,7 +555,7 @@ _telem_pack() {
   case "$v" in
     builder|personal-assistant|account-assistant|essential|optional\
     |personal_assistant|account_assistant|openclaw|claude-code|codex-cli\
-    |kiro-cli|hermes|roundhouse)
+    |kiro-cli|hermes|roundhouse|kirocrew)
       printf '%s' "$v" ;;
   esac
 }
@@ -749,7 +754,7 @@ Options:
   --simple                       Force simple install mode
   --advanced                     Force advanced install mode
   --pack <name>                  Agent pack (openclaw, claude-code, codex-cli,
-                                 kiro-cli, hermes, roundhouse, troika)
+                                 kiro-cli, hermes, roundhouse, troika, kirocrew)
   --profile <name>               Permission profile (builder,
                                  account_assistant, personal_assistant)
   --method <cfn>                 Deploy method (default: cfn)
@@ -1782,7 +1787,7 @@ PACK_EXPERIMENTAL=()
 load_pack_registry() {
   _PACK_REGISTRY="${CLONE_DIR:-}/packs/registry.json"
   if [[ ! -f "$_PACK_REGISTRY" ]]; then
-    local registry_url="https://raw.githubusercontent.com/inceptionstack/lowkey/main/packs/registry.json"
+    local registry_url="https://raw.githubusercontent.com/inceptionstack/lowkey/${REPO_BRANCH:-main}/packs/registry.json"
     _PACK_REGISTRY="/tmp/lowkey-registry-$$.json"
     curl -sfL "$registry_url" -o "$_PACK_REGISTRY" 2>/dev/null || _PACK_REGISTRY=""
   fi
@@ -2118,6 +2123,7 @@ pack_default_model() {
   case "$1" in
     codex-cli)                echo "gpt-5.4" ;;
     kiro-cli)                 echo "kiro-cloud" ;;  # Kiro uses its own inference; value is informational only
+    kirocrew)                 echo "kiro-cloud" ;;  # KiroCrew drives kiro-cli over ACP; same inference
     openclaw)                 echo "us.anthropic.claude-sonnet-4-6" ;;
     claude-code)              echo "us.anthropic.claude-sonnet-4-6" ;;
     troika)                   echo "us.anthropic.claude-sonnet-4-6" ;;
@@ -2289,7 +2295,7 @@ prepare_repo() {
       fi
     else
       rm -rf "$CLONE_DIR" 2>/dev/null || true
-      run_or_fail "Cloning repository" git clone --depth 1 "$REPO_URL" "$CLONE_DIR"
+      run_or_fail "Cloning repository" git clone --depth 1 -b "${REPO_BRANCH:-main}" "$REPO_URL" "$CLONE_DIR"
     fi
 
     cd "$CLONE_DIR"
@@ -2313,6 +2319,7 @@ deploy_console() {
   create_s3_bucket "$bucket" "$DEPLOY_REGION"
 
   local tmp; tmp=$(mktemp /tmp/lowkey-cfn-template.XXXXXX.yaml)
+  TEMPLATE_RAW_URL="$(get_template_url)"
   run_or_fail "Downloading template" curl -sfL "$TEMPLATE_RAW_URL" -o "$tmp"
   rm -f "$_RUN_LOG"
 
@@ -2654,6 +2661,15 @@ show_complete() {
   local next_block=""
   next_block+="Connect to your agent:\n\n"
   next_block+="  ${ssm_cmd}\n\n"
+
+  # KiroCrew-specific: show dashboard URL with public IP
+  if [[ "${PACK_NAME}" == "kirocrew" && -n "${PUBLIC_IP}" ]]; then
+    next_block+="Dashboard:\n"
+    next_block+="  http://${PUBLIC_IP}:5476\n\n"
+    next_block+="Generate login token (run on instance):\n"
+    next_block+="  kirocrew token --ttl 24h\n\n"
+  fi
+
   next_block+="Then run:\n"
   while IFS= read -r line; do
     [[ -n "$line" ]] && next_block+="  ${line}\n"
@@ -2991,8 +3007,8 @@ run_config_and_review() {
     build_deploy_params
   fi
 
-  # Pack-specific: kiro-cli interactive API key for headless mode
-  if [[ "${PACK_NAME:-}" == "kiro-cli" ]]; then
+  # Pack-specific: kiro-cli/kirocrew interactive API key for headless mode
+  if [[ "${PACK_NAME:-}" == "kiro-cli" || "${PACK_NAME:-}" == "kirocrew" ]]; then
     if [[ -z "${KIRO_FROM_SECRET:-}" && "$AUTO_YES" != true ]]; then
       echo ""
       echo -e "  ${BOLD}Kiro CLI supports headless mode (no browser login).${NC}"
