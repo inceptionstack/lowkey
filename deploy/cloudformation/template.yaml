@@ -607,6 +607,21 @@ Resources:
         - Key: loki:pack
           Value: kirocrew
 
+  KiroCrewProtoHeaderFunction:
+    Type: AWS::CloudFront::Function
+    Condition: KiroCrewWithNewVpc
+    Properties:
+      Name: !Sub '${EnvironmentName}-kirocrew-proto'
+      AutoPublish: true
+      FunctionConfig:
+        Comment: 'Inject X-Forwarded-Proto: https so backend cookies get Secure flag'
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          event.request.headers['x-forwarded-proto'] = { value: 'https' };
+          return event.request;
+        }
+
   KiroCrewDistribution:
     Type: AWS::CloudFront::Distribution
     Condition: KiroCrewWithNewVpc
@@ -629,6 +644,9 @@ Resources:
             - DELETE
           CachePolicyId: '4135ea2d-6df8-44a3-9df3-4b5a84be39ad'  # CachingDisabled
           OriginRequestPolicyId: '216adef6-5c7f-47e4-b989-5492eafa07d3'  # AllViewer
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt KiroCrewProtoHeaderFunction.FunctionARN
         Origins:
           - Id: kirocrew-alb-origin
             DomainName: !GetAtt KiroCrewALB.DNSName
@@ -1340,20 +1358,28 @@ Resources:
                       TimeoutSeconds=120
                   )
                   cmd_id = resp['Command']['CommandId']
-                  # Wait for completion
+                  # Wait for completion (tolerate InvocationDoesNotExist during agent pickup)
+                  result = None
                   for _ in range(30):
                       time.sleep(5)
-                      result = ssm.get_command_invocation(
-                          CommandId=cmd_id, InstanceId=instance_id)
+                      try:
+                          result = ssm.get_command_invocation(
+                              CommandId=cmd_id, InstanceId=instance_id)
+                      except ssm.exceptions.InvocationDoesNotExist:
+                          continue
                       if result['Status'] in ('Success', 'Failed', 'TimedOut', 'Cancelled'):
                           break
+                  if result is None:
+                      send_response(event, context, 'FAILED', 'SSM command timed out waiting for invocation')
+                      return
                   if result['Status'] == 'Success':
                       send_response(event, context, 'SUCCESS', 'dashboard.url configured',
                           {'DashboardUrl': dashboard_url})
                   else:
                       send_response(event, context, 'FAILED',
                           f"SSM command {result['Status']}: {result.get('StandardErrorContent', '')[:200]}")
-              except Exception as e:\n                  send_response(event, context, 'FAILED', str(e)[:256])
+              except Exception as e:
+                  send_response(event, context, 'FAILED', str(e)[:256])
 
   KiroCrewDashboardConfigResource:
     Type: Custom::KiroCrewDashboardConfig
