@@ -572,7 +572,7 @@ Resources:
       TargetType: instance
       Targets:
         - Id: !Ref Instance
-      HealthCheckPath: /health
+      HealthCheckPath: /api/health
       HealthCheckIntervalSeconds: 30
       HealthCheckTimeoutSeconds: 10
       HealthyThresholdCount: 2
@@ -1233,6 +1233,139 @@ Resources:
       EnableInspector: !Ref EnableInspector
       EnableAccessAnalyzer: !Ref EnableAccessAnalyzer
       EnableConfigRecorder: !Ref EnableConfigRecorder
+
+  # --------------------------------------------------------------------------
+  # KiroCrew: Post-deploy dashboard.url configuration via SSM RunCommand
+  # --------------------------------------------------------------------------
+  KiroCrewDashboardConfigRole:
+    Type: AWS::IAM::Role
+    Condition: KiroCrewWithNewVpc
+    Properties:
+      RoleName: !Sub '${EnvironmentName}-kirocrew-dashcfg-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: SSMRunCommand
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:SendCommand
+                  - ssm:GetCommandInvocation
+                Resource: '*'
+
+  KiroCrewDashboardConfigFunction:
+    Type: AWS::Lambda::Function
+    Condition: KiroCrewWithNewVpc
+    Properties:
+      FunctionName: !Sub '${EnvironmentName}-kirocrew-dashcfg'
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 300
+      Role: !GetAtt KiroCrewDashboardConfigRole.Arn
+      Code:
+        ZipFile: |
+          import json, urllib.request, boto3, time
+
+          def send_response(event, context, status, reason='', data={}):
+              reason_str = (reason or f'See CW: {context.log_stream_name}')[:256]
+              phys_id = (context.log_stream_name or 'custom-resource')[-64:]
+              safe_data = {k: str(v)[:128] for k, v in (data or {}).items()}
+              body = json.dumps({
+                  'Status': status, 'Reason': reason_str,
+                  'PhysicalResourceId': phys_id,
+                  'StackId': event['StackId'],
+                  'RequestId': event['RequestId'],
+                  'LogicalResourceId': event['LogicalResourceId'],
+                  'Data': safe_data if len(json.dumps(safe_data)) < 1024 else {}
+              }).encode()
+              req = urllib.request.Request(event['ResponseURL'], data=body,
+                  headers={'Content-Type': 'application/json', 'Content-Length': len(body)},
+                  method='PUT')
+              urllib.request.urlopen(req)
+
+          def handler(event, context):
+              print(f"[INFO] Event: {json.dumps(event)}")
+              if event['RequestType'] == 'Delete':
+                  send_response(event, context, 'SUCCESS', 'Delete is a no-op')
+                  return
+
+              props = event.get('ResourceProperties', {})
+              instance_id = props.get('InstanceId', '')
+              dashboard_url = props.get('DashboardUrl', '')
+              region = props.get('Region', 'us-east-1')
+
+              if not instance_id or not dashboard_url:
+                  send_response(event, context, 'FAILED', 'Missing InstanceId or DashboardUrl')
+                  return
+
+              ssm = boto3.client('ssm', region_name=region)
+              # Patch config.json with dashboard.url and restart gateway
+              command = f"""#!/bin/bash
+          set -e
+          CONFIG_FILE="/home/ec2-user/.kiro/crew/config.json"
+          mkdir -p "$(dirname "$CONFIG_FILE")"
+          if [ -f "$CONFIG_FILE" ]; then
+            # Merge dashboard.url into existing config
+            python3 -c "
+          import json, sys
+          cfg = json.load(open('$CONFIG_FILE'))
+          cfg.setdefault('dashboard', {{}})['url'] = '{dashboard_url}'
+          json.dump(cfg, open('$CONFIG_FILE', 'w'), indent=2)
+          print('Updated dashboard.url in config.json')
+          "
+          else
+            echo '{{"dashboard": {{"url": "{dashboard_url}"}}}}' > "$CONFIG_FILE"
+            chown ec2-user:ec2-user "$CONFIG_FILE"
+          fi
+          # Restart gateway to pick up new config
+          if systemctl is-active --quiet kirocrew-gateway 2>/dev/null; then
+            systemctl restart kirocrew-gateway
+            echo 'Restarted kirocrew-gateway'
+          fi
+          """
+              try:
+                  resp = ssm.send_command(
+                      InstanceIds=[instance_id],
+                      DocumentName='AWS-RunShellScript',
+                      Parameters={'commands': [command]},
+                      TimeoutSeconds=120
+                  )
+                  cmd_id = resp['Command']['CommandId']
+                  # Wait for completion
+                  for _ in range(30):
+                      time.sleep(5)
+                      result = ssm.get_command_invocation(
+                          CommandId=cmd_id, InstanceId=instance_id)
+                      if result['Status'] in ('Success', 'Failed', 'TimedOut', 'Cancelled'):
+                          break
+                  if result['Status'] == 'Success':
+                      send_response(event, context, 'SUCCESS', 'dashboard.url configured',
+                          {'DashboardUrl': dashboard_url})
+                  else:
+                      send_response(event, context, 'FAILED',
+                          f"SSM command {result['Status']}: {result.get('StandardErrorContent', '')[:200]}")
+              except Exception as e:\n                  send_response(event, context, 'FAILED', str(e)[:256])
+
+  KiroCrewDashboardConfigResource:
+    Type: Custom::KiroCrewDashboardConfig
+    Condition: KiroCrewWithNewVpc
+    DependsOn:
+      - Instance
+      - KiroCrewDistribution
+    Properties:
+      ServiceToken: !GetAtt KiroCrewDashboardConfigFunction.Arn
+      InstanceId: !Ref Instance
+      DashboardUrl: !Sub 'https://${KiroCrewDistribution.DomainName}'
+      Region: !Ref 'AWS::Region'
 
   # SSM Session Manager Preferences (auto-login as ec2-user with welcome)
   # --------------------------------------------------------------------------
