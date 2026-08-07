@@ -2726,10 +2726,18 @@ show_complete() {
   next_block+="Connect to your agent:\n\n"
   next_block+="  ${ssm_cmd}\n\n"
 
-  # KiroCrew-specific: show dashboard URL with public IP
-  if [[ "${PACK_NAME}" == "kirocrew" && -n "${PUBLIC_IP}" ]]; then
+  # KiroCrew-specific: show dashboard URL (CloudFront if the stack created it,
+  # otherwise fall back to the raw EC2 IP for legacy/edge cases).
+  if [[ "${PACK_NAME}" == "kirocrew" ]]; then
+    local cf_url=""
+    cf_url=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$DEPLOY_REGION" \
+      --query 'Stacks[0].Outputs[?OutputKey==`KiroCrewDashboardUrl`].OutputValue' --output text 2>/dev/null)
     next_block+="Dashboard:\n"
-    next_block+="  http://${PUBLIC_IP}:5476\n\n"
+    if [[ -n "$cf_url" && "$cf_url" != "None" ]]; then
+      next_block+="  ${cf_url}\n\n"
+    elif [[ -n "${PUBLIC_IP}" ]]; then
+      next_block+="  http://${PUBLIC_IP}:5476\n\n"
+    fi
     next_block+="Generate login token (run on instance):\n"
     next_block+="  kirocrew token --ttl 24h\n\n"
   fi
