@@ -2726,20 +2726,58 @@ show_complete() {
   next_block+="Connect to your agent:\n\n"
   next_block+="  ${ssm_cmd}\n\n"
 
-  # KiroCrew-specific: show dashboard URL (CloudFront if the stack created it,
-  # otherwise fall back to the raw EC2 IP for legacy/edge cases).
+  # KiroCrew-specific: dashboard URL with pre-baked login token so the user
+  # can click straight through to an authenticated session. Falls back
+  # gracefully at every layer (no CF URL -> raw IP; no token -> plain URL).
   if [[ "${PACK_NAME}" == "kirocrew" ]]; then
     local cf_url=""
     cf_url=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$DEPLOY_REGION" \
       --query 'Stacks[0].Outputs[?OutputKey==`KiroCrewDashboardUrl`].OutputValue' --output text 2>/dev/null)
-    next_block+="Dashboard:\n"
+    local dash_base=""
     if [[ -n "$cf_url" && "$cf_url" != "None" ]]; then
-      next_block+="  ${cf_url}\n\n"
+      dash_base="$cf_url"
     elif [[ -n "${PUBLIC_IP}" ]]; then
-      next_block+="  http://${PUBLIC_IP}:5476\n\n"
+      dash_base="http://${PUBLIC_IP}:5476"
     fi
-    next_block+="Generate login token (run on instance):\n"
-    next_block+="  kirocrew token --ttl 24h\n\n"
+
+    # Fetch a login token from the instance so the user gets a click-through URL.
+    # kirocrew is installed under the ec2-user home (not on the default PATH the
+    # SSM shell inherits), so invoke it via a login shell as ec2-user.
+    local dash_token="" token_cmd_id="" token_out=""
+    token_cmd_id=$(aws ssm send-command \
+      --instance-ids "$INSTANCE_ID" \
+      --document-name AWS-RunShellScript \
+      --parameters 'commands=["sudo -u ec2-user bash -lc \"kirocrew token --ttl 24h 2>/dev/null\" | tail -n +1"]' \
+      --region "$DEPLOY_REGION" --output text --query 'Command.CommandId' 2>/dev/null || echo "")
+    if [[ -n "$token_cmd_id" ]]; then
+      # Poll up to ~15s for the SSM command to finish.
+      local _t
+      for _t in 1 2 3 4 5 6 7 8; do
+        sleep 2
+        local st
+        st=$(aws ssm get-command-invocation --command-id "$token_cmd_id" \
+          --instance-id "$INSTANCE_ID" --region "$DEPLOY_REGION" \
+          --query 'Status' --output text 2>/dev/null || echo "")
+        [[ "$st" == "Success" || "$st" == "Failed" || "$st" == "TimedOut" ]] && break
+      done
+      token_out=$(aws ssm get-command-invocation --command-id "$token_cmd_id" \
+        --instance-id "$INSTANCE_ID" --region "$DEPLOY_REGION" \
+        --query 'StandardOutputContent' --output text 2>/dev/null || echo "")
+      # kirocrew token prints both a localhost URL and a public URL; pull the JWT
+      # out of either. Format is `...?token=<jwt>` where <jwt> has three
+      # dot-separated base64url segments.
+      dash_token=$(printf '%s' "$token_out" | grep -oE 'token=[A-Za-z0-9_.-]+' | head -1 | sed 's/^token=//')
+    fi
+
+    next_block+="Dashboard:\n"
+    if [[ -n "$dash_base" && -n "$dash_token" ]]; then
+      next_block+="  ${dash_base}/?token=${dash_token}\n\n"
+      next_block+="  ${DIM}(Token valid 24h. Regenerate on the instance with: kirocrew token --ttl 24h)${NC}\n\n"
+    elif [[ -n "$dash_base" ]]; then
+      next_block+="  ${dash_base}\n\n"
+      next_block+="Generate login token (run on instance):\n"
+      next_block+="  kirocrew token --ttl 24h\n\n"
+    fi
   fi
 
   next_block+="Then run:\n"
