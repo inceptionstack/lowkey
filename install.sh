@@ -2379,10 +2379,24 @@ deploy_cfn_stack() {
   local template="$1" capabilities="$2"
   STACK_NAME="${ENV_NAME}-stack"
 
+  # Template is ~62KB, CFN inline limit is 51,200 bytes. Upload to S3 first.
+  local bucket="${ENV_NAME}-cfn-templates-${ACCOUNT_ID}"
+  create_s3_bucket "$bucket" "$DEPLOY_REGION"
+
+  info "Uploading template to S3 (inline limit is 51.2KB, template is $(wc -c < "$template") bytes)"
+  aws s3 cp "$template" "s3://${bucket}/lowkey/template.yaml" --region "$DEPLOY_REGION" >/dev/null \
+    || fail "Failed to upload template to S3"
+
+  # Pre-signed URL (bucket blocks public access)
+  local s3_url
+  s3_url=$(aws s3 presign "s3://${bucket}/lowkey/template.yaml" \
+    --expires-in 3600 --region "$DEPLOY_REGION") \
+    || fail "Could not generate pre-signed URL for template"
+
   # shellcheck disable=SC2046
   aws cloudformation create-stack \
     --stack-name "$STACK_NAME" \
-    --template-body "file://${template}" \
+    --template-url "$s3_url" \
     --region "$DEPLOY_REGION" \
     --capabilities $capabilities \
     --parameters $(format_cfn_cli_params) \
