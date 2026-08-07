@@ -2991,6 +2991,37 @@ run_config_and_review() {
     build_deploy_params
   fi
 
+  # Pack-specific: kiro-cli interactive API key for headless mode
+  if [[ "${PACK_NAME:-}" == "kiro-cli" ]]; then
+    if [[ -z "${KIRO_FROM_SECRET:-}" && "$AUTO_YES" != true ]]; then
+      echo ""
+      echo -e "  ${BOLD}Kiro CLI supports headless mode (no browser login).${NC}"
+      echo -e "  Create an API key at: ${CYAN}https://app.kiro.dev/settings/api-keys${NC}"
+      echo -e "  (Your organization must have API keys enabled.)"
+      echo ""
+      echo -e "  Press Enter to skip (you can authenticate via browser later)."
+      echo ""
+      local _KIRO_API_KEY=""
+      prompt_secret "Kiro API key" _KIRO_API_KEY ""
+      if [[ -n "$_KIRO_API_KEY" ]]; then
+        # Validate format: ksk_<alphanumeric>, ~35 chars
+        if [[ ! "$_KIRO_API_KEY" =~ ^ksk_[A-Za-z0-9]{26,96}$ ]]; then
+          warn "API key doesn't match expected format (ksk_...). Skipping — authenticate manually after install."
+          _KIRO_API_KEY=""
+        else
+          # Secret name determined now; actual write deferred until after user confirms
+          _KIRO_SECRET_NAME="/lowkey/${ENV_NAME}/kiro-api-key"
+          KIRO_FROM_SECRET="${_KIRO_SECRET_NAME}"
+          # Update PARAM_VALUES[17] (KiroFromSecret index)
+          PARAM_VALUES[17]="$KIRO_FROM_SECRET"
+          ok "API key will be stored in Secrets Manager: ${_KIRO_SECRET_NAME}"
+        fi
+      else
+        info "Skipping API key — authenticate after install with: kiro-cli login --use-device-flow"
+      fi
+    fi
+  fi
+
   # Pack-specific: Troika primary + daily-driver selection
   if [[ "${PACK_NAME:-}" == "troika" ]]; then
     # ── Primary (first horse) ────────────────────────────────────────────────
@@ -3113,6 +3144,36 @@ main() {
     fi
     rm -f "$token_file"
     unset _RH_BOT_TOKEN
+  fi
+
+  # Kiro CLI: save API key to Secrets Manager (deferred until after user confirmation)
+  if [[ -n "${_KIRO_API_KEY:-}" && -n "${_KIRO_SECRET_NAME:-}" ]]; then
+    info "Storing Kiro API key in Secrets Manager: ${_KIRO_SECRET_NAME}"
+    local kiro_key_file
+    kiro_key_file=$(mktemp /tmp/lowkey-kiro-key.XXXXXX)
+    chmod 600 "$kiro_key_file"
+    printf '%s' "$_KIRO_API_KEY" > "$kiro_key_file"
+    # Restore if in pending-deletion state
+    aws secretsmanager restore-secret --secret-id "$_KIRO_SECRET_NAME" --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
+    local kiro_sm_err=""
+    if kiro_sm_err=$(aws secretsmanager create-secret \
+      --name "$_KIRO_SECRET_NAME" \
+      --secret-string "file://${kiro_key_file}" \
+      --description "Kiro CLI API key for headless mode (${ENV_NAME})" \
+      --tags Key=loki:managed,Value=true Key=loki:pack,Value=kiro-cli Key=loki:env,Value="${ENV_NAME}" \
+      --region "$DEPLOY_REGION" 2>&1); then
+      ok "Kiro API key saved to Secrets Manager"
+    elif kiro_sm_err=$(aws secretsmanager put-secret-value \
+      --secret-id "$_KIRO_SECRET_NAME" \
+      --secret-string "file://${kiro_key_file}" \
+      --region "$DEPLOY_REGION" 2>&1); then
+      ok "Kiro API key updated in Secrets Manager"
+    else
+      rm -f "$kiro_key_file"
+      fail "Failed to save Kiro API key to Secrets Manager: ${kiro_sm_err}"
+    fi
+    rm -f "$kiro_key_file"
+    unset _KIRO_API_KEY
   fi
 
   # Console deploy exits early (no clone, no bootstrap wait)
