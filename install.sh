@@ -2529,6 +2529,7 @@ PACK_NAME="openclaw"  # Default pack; overridden by collect_config
 # VPC reuse: set by check_existing_deployments(); empty = create new VPC
 EXISTING_VPC_ID=""
 EXISTING_SUBNET_ID=""
+EXISTING_SUBNET_ID2=""  # KiroCrew ALB needs a 2nd AZ subnet on existing-VPC path
 
 # ============================================================================
 # Ensure Lowkey-Session SSM document exists (instance-scoped, not account-wide)
@@ -3174,6 +3175,7 @@ run_config_and_review() {
     PRESELECT_METHOD=""
     EXISTING_VPC_ID=""
     EXISTING_SUBNET_ID=""
+    EXISTING_SUBNET_ID2=""
     STEP_NUM=1
     run_config_and_review
     return
