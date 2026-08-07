@@ -3091,8 +3091,18 @@ run_config_and_review() {
           # Secret name determined now; actual write deferred until after user confirms
           _KIRO_SECRET_NAME="/lowkey/${ENV_NAME}/kiro-api-key"
           KIRO_FROM_SECRET="${_KIRO_SECRET_NAME}"
-          # Update PARAM_VALUES[17] (KiroFromSecret index)
-          PARAM_VALUES[17]="$KIRO_FROM_SECRET"
+          # Update PARAM_VALUES at the KiroFromSecret index (looked up by name to
+          # survive future reordering; hardcoded index bit us when ExistingSubnetId2
+          # was inserted and shifted RepoBranch/KiroFromSecret by one).
+          _kiro_idx=-1
+          for _i in "${!PARAM_CFN_NAMES[@]}"; do
+            [[ "${PARAM_CFN_NAMES[$_i]}" == "KiroFromSecret" ]] && { _kiro_idx=$_i; break; }
+          done
+          if [[ "$_kiro_idx" -ge 0 ]]; then
+            PARAM_VALUES[$_kiro_idx]="$KIRO_FROM_SECRET"
+          else
+            fail "BUG: KiroFromSecret not found in PARAM_CFN_NAMES"
+          fi
           ok "API key will be stored in Secrets Manager: ${_KIRO_SECRET_NAME}"
         fi
       else
