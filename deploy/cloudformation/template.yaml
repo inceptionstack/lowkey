@@ -50,6 +50,7 @@ Metadata:
           - PublicSubnetCidr
           - ExistingVpcId
           - ExistingSubnetId
+          - ExistingSubnetId2
           - SSHAllowedCidr
           - KeyPairName
       - Label:
@@ -111,7 +112,9 @@ Metadata:
       ExistingVpcId:
         default: "Existing VPC ID (leave empty to create new)"
       ExistingSubnetId:
-        default: "Existing Public Subnet ID"
+        default: "Existing Public Subnet ID (AZ #1)"
+      ExistingSubnetId2:
+        default: "Second Existing Public Subnet ID (AZ #2, required for KiroCrew ALB)"
 
 # ============================================================================
 # PARAMETERS
@@ -346,6 +349,12 @@ Parameters:
     Description: "Public subnet ID in the existing VPC. Required if ExistingVpcId is set."
     AllowedPattern: '^(subnet-[a-z0-9]+)?$'
 
+  ExistingSubnetId2:
+    Type: String
+    Default: ''
+    Description: "Second public subnet ID in a different AZ. Required for KiroCrew pack (ALB needs 2 AZs) when ExistingVpcId is set."
+    AllowedPattern: '^(subnet-[a-z0-9]+)?$'
+
   RepoBranch:
     Type: String
     Default: 'main'
@@ -365,6 +374,15 @@ Rules:
     Assertions:
       - Assert: !Not [!Equals [!Ref ExistingVpcId, '']]
         AssertDescription: "ExistingVpcId is required when ExistingSubnetId is provided."
+  KiroCrewSubnet2RequiredWithExistingVpc:
+    RuleCondition: !And
+      - !Equals [!Ref PackName, 'kirocrew']
+      - !Not [!Equals [!Ref ExistingVpcId, '']]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref ExistingSubnetId2, '']]
+        AssertDescription: "ExistingSubnetId2 (second AZ) is required for KiroCrew pack when ExistingVpcId is set — ALB needs 2 subnets in different AZs."
+      - Assert: !Not [!Equals [!Ref ExistingSubnetId2, !Ref ExistingSubnetId]]
+        AssertDescription: "ExistingSubnetId2 must be different from ExistingSubnetId (different AZs)."
 
 # ============================================================================
 # CONDITIONS
@@ -383,12 +401,11 @@ Conditions:
   RunSecurityServices: !Not [!Condition IsPersonalAssistant]
   RunBedrockForm: !Equals [!Ref EnableBedrockForm, 'true']
   IsKiroCrew: !Equals [!Ref PackName, 'kirocrew']
-  KiroCrewWithNewVpc: !And
+  # KiroCrewSubnet2 (in-template second AZ subnet) only needed on new-VPC path;
+  # existing-VPC path uses ExistingSubnetId2 passed by the caller.
+  KiroCrewNeedsSubnet2: !And
     - !Condition IsKiroCrew
     - !Condition CreateNewVpc
-  KiroCrewExistingVpc: !And
-    - !Condition IsKiroCrew
-    - !Not [!Condition CreateNewVpc]
 
 # ============================================================================
 # RESOURCES
@@ -492,7 +509,7 @@ Resources:
   # --------------------------------------------------------------------------
   KiroCrewSubnet2:
     Type: AWS::EC2::Subnet
-    Condition: KiroCrewWithNewVpc
+    Condition: KiroCrewNeedsSubnet2
     Properties:
       VpcId: !Ref VPC
       CidrBlock: '10.0.2.0/24'
@@ -508,7 +525,7 @@ Resources:
 
   KiroCrewSubnet2RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
-    Condition: KiroCrewWithNewVpc
+    Condition: KiroCrewNeedsSubnet2
     Properties:
       SubnetId: !Ref KiroCrewSubnet2
       RouteTableId: !Ref PublicRouteTable
@@ -518,7 +535,7 @@ Resources:
   # --------------------------------------------------------------------------
   KiroCrewALBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
-    Condition: KiroCrewWithNewVpc
+    Condition: IsKiroCrew
     Properties:
       GroupName: !Sub '${AWS::StackName}-kirocrew-alb-sg'
       GroupDescription: ALB for KiroCrew dashboard (CloudFront origin-facing only)
@@ -543,14 +560,14 @@ Resources:
 
   KiroCrewALB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
-    Condition: KiroCrewWithNewVpc
+    Condition: IsKiroCrew
     Properties:
       Name: !Sub '${EnvironmentName}-kirocrew-alb'
       Scheme: internet-facing
       Type: application
       Subnets:
         - !If [CreateNewVpc, !Ref PublicSubnet, !Ref ExistingSubnetId]
-        - !If [CreateNewVpc, !Ref KiroCrewSubnet2, !Ref ExistingSubnetId]
+        - !If [CreateNewVpc, !Ref KiroCrewSubnet2, !Ref ExistingSubnetId2]
       SecurityGroups:
         - !Ref KiroCrewALBSecurityGroup
       Tags:
@@ -563,7 +580,7 @@ Resources:
 
   KiroCrewTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
-    Condition: KiroCrewWithNewVpc
+    Condition: IsKiroCrew
     Properties:
       Name: !Sub '${EnvironmentName}-kirocrew-tg'
       Port: 5476
@@ -583,7 +600,7 @@ Resources:
 
   KiroCrewHTTPListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
-    Condition: KiroCrewWithNewVpc
+    Condition: IsKiroCrew
     Properties:
       LoadBalancerArn: !Ref KiroCrewALB
       Port: 80
@@ -594,7 +611,7 @@ Resources:
 
   KiroCrewOriginVerifySecret:
     Type: AWS::SecretsManager::Secret
-    Condition: KiroCrewWithNewVpc
+    Condition: IsKiroCrew
     Properties:
       Name: !Sub '/lowkey/${EnvironmentName}/kirocrew-origin-verify'
       Description: Origin verify header value — CloudFront injects, ALB validates
@@ -609,7 +626,7 @@ Resources:
 
   KiroCrewProtoHeaderFunction:
     Type: AWS::CloudFront::Function
-    Condition: KiroCrewWithNewVpc
+    Condition: IsKiroCrew
     Properties:
       Name: !Sub '${EnvironmentName}-kirocrew-proto'
       AutoPublish: true
@@ -624,7 +641,7 @@ Resources:
 
   KiroCrewDistribution:
     Type: AWS::CloudFront::Distribution
-    Condition: KiroCrewWithNewVpc
+    Condition: IsKiroCrew
     DependsOn: KiroCrewALB
     Properties:
       DistributionConfig:
@@ -684,20 +701,12 @@ Resources:
           CidrIp: !Ref SSHAllowedCidr
           Description: SSH access
         - !If
-          - KiroCrewWithNewVpc
+          - IsKiroCrew
           - IpProtocol: tcp
             FromPort: 5476
             ToPort: 5476
             SourceSecurityGroupId: !Ref KiroCrewALBSecurityGroup
             Description: KiroCrew gateway from ALB only
-          - !Ref 'AWS::NoValue'
-        - !If
-          - KiroCrewExistingVpc
-          - IpProtocol: tcp
-            FromPort: 5476
-            ToPort: 5476
-            CidrIp: '0.0.0.0/0'
-            Description: KiroCrew gateway (direct access, existing VPC without ALB)
           - !Ref 'AWS::NoValue'
       SecurityGroupEgress:
         - IpProtocol: '-1'
@@ -1257,7 +1266,7 @@ Resources:
   # --------------------------------------------------------------------------
   KiroCrewDashboardConfigRole:
     Type: AWS::IAM::Role
-    Condition: KiroCrewWithNewVpc
+    Condition: IsKiroCrew
     Properties:
       RoleName: !Sub '${EnvironmentName}-kirocrew-dashcfg-role'
       AssumeRolePolicyDocument:
@@ -1282,7 +1291,7 @@ Resources:
 
   KiroCrewDashboardConfigFunction:
     Type: AWS::Lambda::Function
-    Condition: KiroCrewWithNewVpc
+    Condition: IsKiroCrew
     Properties:
       FunctionName: !Sub '${EnvironmentName}-kirocrew-dashcfg'
       Runtime: python3.12
@@ -1383,7 +1392,7 @@ Resources:
 
   KiroCrewDashboardConfigResource:
     Type: Custom::KiroCrewDashboardConfig
-    Condition: KiroCrewWithNewVpc
+    Condition: IsKiroCrew
     DependsOn:
       - Instance
       - KiroCrewDistribution
@@ -1577,12 +1586,12 @@ Outputs:
     Value: !Ref ProfileName
 
   KiroCrewDashboardUrl:
-    Condition: KiroCrewWithNewVpc
+    Condition: IsKiroCrew
     Description: KiroCrew dashboard URL (CloudFront HTTPS)
     Value: !Sub 'https://${KiroCrewDistribution.DomainName}'
 
   KiroCrewALBDns:
-    Condition: KiroCrewWithNewVpc
+    Condition: IsKiroCrew
     Description: KiroCrew ALB DNS name (do not access directly — use CloudFront)
     Value: !GetAtt KiroCrewALB.DNSName
 

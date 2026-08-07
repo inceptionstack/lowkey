@@ -1676,11 +1676,59 @@ check_existing_deployments() {
 
       if [[ -n "$subnet_id" && "$subnet_id" != "None" ]]; then
         EXISTING_SUBNET_ID="$subnet_id"
-        ok "Reusing VPC: ${EXISTING_VPC_ID}  subnet: ${EXISTING_SUBNET_ID}"
+        # KiroCrew pack needs a second public subnet in a DIFFERENT AZ (ALB requirement).
+        # Discover it now so we can pass ExistingSubnetId2 to the stack.
+        EXISTING_SUBNET_ID2=""
+        if [[ "${PACK_NAME:-}" == "kirocrew" ]]; then
+          local subnet1_az
+          subnet1_az=$(aws ec2 describe-subnets \
+            --subnet-ids "$subnet_id" \
+            --query 'Subnets[0].AvailabilityZone' --output text --region "$check_region" 2>/dev/null || echo "")
+          for candidate in $candidate_subnets; do
+            [[ "$candidate" == "None" || -z "$candidate" || "$candidate" == "$subnet_id" ]] && continue
+            local candidate_az
+            candidate_az=$(aws ec2 describe-subnets \
+              --subnet-ids "$candidate" \
+              --query 'Subnets[0].AvailabilityZone' --output text --region "$check_region" 2>/dev/null || echo "")
+            if [[ -n "$candidate_az" && "$candidate_az" != "$subnet1_az" ]]; then
+              # Verify this candidate also has IGW route
+              local rtb2_id has_igw2
+              rtb2_id=$(aws ec2 describe-route-tables \
+                --filters "Name=association.subnet-id,Values=${candidate}" \
+                --query 'RouteTables[0].RouteTableId' --output text --region "$check_region" 2>/dev/null || echo "")
+              if [[ -z "$rtb2_id" || "$rtb2_id" == "None" ]]; then
+                rtb2_id=$(aws ec2 describe-route-tables \
+                  --filters "Name=vpc-id,Values=${chosen_vpc}" "Name=association.main,Values=true" \
+                  --query 'RouteTables[0].RouteTableId' --output text --region "$check_region" 2>/dev/null || echo "")
+              fi
+              if [[ -n "$rtb2_id" && "$rtb2_id" != "None" ]]; then
+                has_igw2=$(aws ec2 describe-route-tables \
+                  --route-table-ids "$rtb2_id" \
+                  --query 'RouteTables[0].Routes[?DestinationCidrBlock==`0.0.0.0/0`].GatewayId' \
+                  --output text --region "$check_region" 2>/dev/null || echo "")
+                if [[ "$has_igw2" == igw-* ]]; then
+                  EXISTING_SUBNET_ID2="$candidate"
+                  break
+                fi
+              fi
+            fi
+          done
+          if [[ -z "$EXISTING_SUBNET_ID2" ]]; then
+            warn "KiroCrew pack requires 2 public subnets in different AZs (for ALB) but only found one in ${chosen_vpc} — creating new VPC instead"
+            EXISTING_VPC_ID=""
+            EXISTING_SUBNET_ID=""
+            EXISTING_SUBNET_ID2=""
+          else
+            ok "Reusing VPC: ${EXISTING_VPC_ID}  subnets: ${EXISTING_SUBNET_ID}, ${EXISTING_SUBNET_ID2}"
+          fi
+        else
+          ok "Reusing VPC: ${EXISTING_VPC_ID}  subnet: ${EXISTING_SUBNET_ID}"
+        fi
       else
         warn "Could not find a public subnet in ${chosen_vpc} — creating new VPC instead"
         EXISTING_VPC_ID=""
         EXISTING_SUBNET_ID=""
+        EXISTING_SUBNET_ID2=""
       fi
     else
       # User declined reuse — proceed with a new VPC
@@ -2111,7 +2159,7 @@ collect_security_config() {
 # Parameter source-of-truth: single mapping for CFN Console and CFN CLI
 # ============================================================================
 # ⚠ KEEP THESE TWO ARRAYS IN SYNC — same order, same count
-PARAM_CFN_NAMES=(EnvironmentName PackName ProfileName InstanceType DefaultModel ModelMode BedrockRegion LokiWatermark EnableBedrockForm EnableSecurityHub EnableGuardDuty EnableInspector EnableAccessAnalyzer EnableConfigRecorder ExistingVpcId ExistingSubnetId RepoBranch KiroFromSecret TelegramBotTokenSecret TelegramUser Primary DailyDriver CodexModel)
+PARAM_CFN_NAMES=(EnvironmentName PackName ProfileName InstanceType DefaultModel ModelMode BedrockRegion LokiWatermark EnableBedrockForm EnableSecurityHub EnableGuardDuty EnableInspector EnableAccessAnalyzer EnableConfigRecorder ExistingVpcId ExistingSubnetId ExistingSubnetId2 RepoBranch KiroFromSecret TelegramBotTokenSecret TelegramUser Primary DailyDriver CodexModel)
 PARAM_VALUES=()  # populated by build_deploy_params()
 
 # Per-pack default model (passed to CFN DefaultModel / bootstrap.sh --model).
@@ -2163,6 +2211,7 @@ build_deploy_params() {
     "$CONFIG_RECORDER"
     "${EXISTING_VPC_ID:-}"
     "${EXISTING_SUBNET_ID:-}"
+    "${EXISTING_SUBNET_ID2:-}"
     "$REPO_BRANCH"
     "${KIRO_FROM_SECRET:-}"
     "${TELEGRAM_BOT_TOKEN_SECRET:-}"
