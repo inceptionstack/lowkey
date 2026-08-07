@@ -3001,7 +3001,7 @@ run_config_and_review() {
       echo ""
       echo -e "  Press Enter to skip (you can authenticate via browser later)."
       echo ""
-      local _KIRO_API_KEY=""
+      _KIRO_API_KEY=""
       prompt_secret "Kiro API key" _KIRO_API_KEY ""
       if [[ -n "$_KIRO_API_KEY" ]]; then
         # Validate format: ksk_<alphanumeric>, ~35 chars
