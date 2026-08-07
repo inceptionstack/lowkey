@@ -71,7 +71,7 @@ get_template_url() {
   echo "https://raw.githubusercontent.com/inceptionstack/lowkey/${REPO_BRANCH:-main}/deploy/cloudformation/template.yaml"
 }
 SSM_DOC_NAME=""
-INSTALLER_VERSION="0.5.197"
+INSTALLER_VERSION="0.5.198"
 
 # ── Telemetry ────────────────────────────────────────────────────────────
 # Fire-and-forget telemetry. Opt-out: LOWKEY_TELEMETRY=0 / DO_NOT_TRACK=1
