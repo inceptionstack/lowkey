@@ -3007,8 +3007,8 @@ run_config_and_review() {
     build_deploy_params
   fi
 
-  # Pack-specific: kiro-cli interactive API key for headless mode
-  if [[ "${PACK_NAME:-}" == "kiro-cli" ]]; then
+  # Pack-specific: kiro-cli/kirocrew interactive API key for headless mode
+  if [[ "${PACK_NAME:-}" == "kiro-cli" || "${PACK_NAME:-}" == "kirocrew" ]]; then
     if [[ -z "${KIRO_FROM_SECRET:-}" && "$AUTO_YES" != true ]]; then
       echo ""
       echo -e "  ${BOLD}Kiro CLI supports headless mode (no browser login).${NC}"
