@@ -292,10 +292,10 @@ Read it from the stack outputs after deploy completes.
 - With HTTPS, tokens in URL query strings are encrypted in transit
 - CloudFront prefix list restricts ALB ingress to CF edge IPs only
 
-## Open Questions
+## Resolved Questions
 
-1. **Health check path** — Does kirocrew gateway serve `/health` or `/`? Need to verify.
-2. **WebSocket support** — Does the dashboard use WebSockets? If yes, need to ensure ALB + CF pass through upgrades (CF supports WS with cache disabled).
-3. **Existing VPC** — When user provides an existing VPC, do we require a second subnet param or auto-discover? (Recommend: auto-discover AZs from the provided subnet's VPC)
-4. **Custom domain** — Defer to a future iteration? Start with `*.cloudfront.net`.
-5. **WAF** — Worth adding rate limiting on the token endpoint? (Future iteration)
+1. **Health check path** — `/health` (per kiro.dev/docs/crew/running-24-7 + pack PLAN.md)
+2. **WebSocket support** — YES. Caching disabled on all behaviors (CachingDisabled policy). ALB + CF both support WS upgrade pass-through with cache disabled.
+3. **Existing VPC** — Auto-discover AZs from provided subnet's VPC.
+4. **Custom domain** — No. Use `*.cloudfront.net` (d-prefix domain).
+5. **WAF** — Future iteration.

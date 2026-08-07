@@ -383,6 +383,12 @@ Conditions:
   RunSecurityServices: !Not [!Condition IsPersonalAssistant]
   RunBedrockForm: !Equals [!Ref EnableBedrockForm, 'true']
   IsKiroCrew: !Equals [!Ref PackName, 'kirocrew']
+  KiroCrewWithNewVpc: !And
+    - !Condition IsKiroCrew
+    - !Condition CreateNewVpc
+  KiroCrewExistingVpc: !And
+    - !Condition IsKiroCrew
+    - !Not [!Condition CreateNewVpc]
 
 # ============================================================================
 # RESOURCES
@@ -482,6 +488,169 @@ Resources:
       RouteTableId: !Ref PublicRouteTable
 
   # --------------------------------------------------------------------------
+  # KiroCrew: Second subnet (ALB requires 2 AZs)
+  # --------------------------------------------------------------------------
+  KiroCrewSubnet2:
+    Type: AWS::EC2::Subnet
+    Condition: KiroCrewWithNewVpc
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: '10.0.2.0/24'
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-public-2'
+        - Key: loki:managed
+          Value: 'true'
+        - Key: loki:watermark
+          Value: !Ref LokiWatermark
+
+  KiroCrewSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: KiroCrewWithNewVpc
+    Properties:
+      SubnetId: !Ref KiroCrewSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # --------------------------------------------------------------------------
+  # KiroCrew: ALB + Target Group + CloudFront
+  # --------------------------------------------------------------------------
+  KiroCrewALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: KiroCrewWithNewVpc
+    Properties:
+      GroupName: !Sub '${AWS::StackName}-kirocrew-alb-sg'
+      GroupDescription: ALB for KiroCrew dashboard (CloudFront origin-facing only)
+      VpcId: !If [CreateNewVpc, !Ref VPC, !Ref ExistingVpcId]
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: '0.0.0.0/0'
+          Description: HTTP from CloudFront (prefix list not available in all regions — origin-verify header enforces)
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: '0.0.0.0/0'
+          Description: All outbound
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-kirocrew-alb-sg'
+        - Key: loki:managed
+          Value: 'true'
+        - Key: loki:watermark
+          Value: !Ref LokiWatermark
+
+  KiroCrewALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Condition: KiroCrewWithNewVpc
+    Properties:
+      Name: !Sub '${EnvironmentName}-kirocrew-alb'
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !If [CreateNewVpc, !Ref PublicSubnet, !Ref ExistingSubnetId]
+        - !If [CreateNewVpc, !Ref KiroCrewSubnet2, !Ref ExistingSubnetId]
+      SecurityGroups:
+        - !Ref KiroCrewALBSecurityGroup
+      Tags:
+        - Key: loki:managed
+          Value: 'true'
+        - Key: loki:watermark
+          Value: !Ref LokiWatermark
+        - Key: loki:pack
+          Value: kirocrew
+
+  KiroCrewTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Condition: KiroCrewWithNewVpc
+    Properties:
+      Name: !Sub '${EnvironmentName}-kirocrew-tg'
+      Port: 5476
+      Protocol: HTTP
+      VpcId: !If [CreateNewVpc, !Ref VPC, !Ref ExistingVpcId]
+      TargetType: instance
+      Targets:
+        - Id: !Ref Instance
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Tags:
+        - Key: loki:managed
+          Value: 'true'
+
+  KiroCrewHTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: KiroCrewWithNewVpc
+    Properties:
+      LoadBalancerArn: !Ref KiroCrewALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref KiroCrewTargetGroup
+
+  KiroCrewOriginVerifySecret:
+    Type: AWS::SecretsManager::Secret
+    Condition: KiroCrewWithNewVpc
+    Properties:
+      Name: !Sub '/lowkey/${EnvironmentName}/kirocrew-origin-verify'
+      Description: Origin verify header value — CloudFront injects, ALB validates
+      GenerateSecretString:
+        ExcludePunctuation: true
+        PasswordLength: 32
+      Tags:
+        - Key: loki:managed
+          Value: 'true'
+        - Key: loki:pack
+          Value: kirocrew
+
+  KiroCrewDistribution:
+    Type: AWS::CloudFront::Distribution
+    Condition: KiroCrewWithNewVpc
+    DependsOn: KiroCrewALB
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub 'KiroCrew dashboard (${EnvironmentName})'
+        HttpVersion: http2and3
+        DefaultCacheBehavior:
+          TargetOriginId: kirocrew-alb-origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - POST
+            - PATCH
+            - DELETE
+          CachePolicyId: '4135ea2d-6df8-44a3-9df3-4b5a84be39ad'  # CachingDisabled
+          OriginRequestPolicyId: '216adef6-5c7f-47e4-b989-5492eafa07d3'  # AllViewer
+        Origins:
+          - Id: kirocrew-alb-origin
+            DomainName: !GetAtt KiroCrewALB.DNSName
+            CustomOriginConfig:
+              OriginProtocolPolicy: http-only
+              HTTPPort: 80
+              OriginSSLProtocols:
+                - TLSv1.2
+            OriginCustomHeaders:
+              - HeaderName: x-origin-verify
+                HeaderValue: !Sub '{{resolve:secretsmanager:${KiroCrewOriginVerifySecret}}}'
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+      Tags:
+        - Key: loki:managed
+          Value: 'true'
+        - Key: loki:watermark
+          Value: !Ref LokiWatermark
+        - Key: loki:pack
+          Value: kirocrew
+
+  # --------------------------------------------------------------------------
   # Security Group
   # --------------------------------------------------------------------------
   InstanceSecurityGroup:
@@ -497,12 +666,20 @@ Resources:
           CidrIp: !Ref SSHAllowedCidr
           Description: SSH access
         - !If
-          - IsKiroCrew
+          - KiroCrewWithNewVpc
+          - IpProtocol: tcp
+            FromPort: 5476
+            ToPort: 5476
+            SourceSecurityGroupId: !Ref KiroCrewALBSecurityGroup
+            Description: KiroCrew gateway from ALB only
+          - !Ref 'AWS::NoValue'
+        - !If
+          - KiroCrewExistingVpc
           - IpProtocol: tcp
             FromPort: 5476
             ToPort: 5476
             CidrIp: '0.0.0.0/0'
-            Description: KiroCrew gateway dashboard
+            Description: KiroCrew gateway (direct access, existing VPC without ALB)
           - !Ref 'AWS::NoValue'
       SecurityGroupEgress:
         - IpProtocol: '-1'
@@ -1239,4 +1416,14 @@ Outputs:
   ProfileName:
     Description: "Deployed permission profile"
     Value: !Ref ProfileName
+
+  KiroCrewDashboardUrl:
+    Condition: KiroCrewWithNewVpc
+    Description: KiroCrew dashboard URL (CloudFront HTTPS)
+    Value: !Sub 'https://${KiroCrewDistribution.DomainName}'
+
+  KiroCrewALBDns:
+    Condition: KiroCrewWithNewVpc
+    Description: KiroCrew ALB DNS name (do not access directly — use CloudFront)
+    Value: !GetAtt KiroCrewALB.DNSName
 
