@@ -94,7 +94,7 @@ Metadata:
       RootVolumeSize:
         default: "Root Volume Size (GB)"
       DataVolumeSize:
-        default: "Data Volume Size (GB) — set 0 to skip"
+        default: "Data Volume Size (GB) - set 0 to skip"
       VpcCidr:
         default: "VPC CIDR Block"
       PublicSubnetCidr:
@@ -179,7 +179,7 @@ Parameters:
   SSHAllowedCidr:
     Type: String
     Default: '127.0.0.1/32'
-    Description: "IP range allowed to SSH. Default 127.0.0.1/32 disables SSH entirely — use AWS SSM Session Manager instead (recommended). Set to your-ip/32 to enable SSH."
+    Description: "IP range allowed to SSH. Default 127.0.0.1/32 disables SSH entirely - use AWS SSM Session Manager instead (recommended). Set to your-ip/32 to enable SSH."
     AllowedPattern: '(\d{1,3}\.){3}\d{1,3}/\d{1,2}'
 
   RootVolumeSize:
@@ -199,7 +199,7 @@ Parameters:
   KeyPairName:
     Type: String
     Default: ''
-    Description: "EC2 key pair for SSH access. Leave blank to skip — SSM Session Manager is the recommended access method."
+    Description: "EC2 key pair for SSH access. Leave blank to skip - SSM Session Manager is the recommended access method."
 
   OpenClawGatewayPort:
     Type: Number
@@ -260,7 +260,7 @@ Parameters:
   KiroFromSecret:
     Type: String
     Default: ''
-    Description: "AWS Secrets Manager secret id/arn whose SecretString is the Kiro API key (kiro-cli pack only, headless mode). The raw key is NOT stored in this template — the instance resolves the secret at install time via its IAM role."
+    Description: "AWS Secrets Manager secret id/arn whose SecretString is the Kiro API key (kiro-cli pack only, headless mode). The raw key is NOT stored in this template - the instance resolves the secret at install time via its IAM role."
 
   TelegramBotTokenSecret:
     Type: String
@@ -294,7 +294,7 @@ Parameters:
     Type: String
     Default: 'false'
     AllowedValues: ['true', 'false']
-    Description: "Submit the Bedrock model access use-case form. Only needed once per account — skip if Bedrock is already enabled."
+    Description: "Submit the Bedrock model access use-case form. Only needed once per account - skip if Bedrock is already enabled."
 
   RequestQuotaIncreases:
     Type: String
@@ -380,7 +380,7 @@ Rules:
       - !Not [!Equals [!Ref ExistingVpcId, '']]
     Assertions:
       - Assert: !Not [!Equals [!Ref ExistingSubnetId2, '']]
-        AssertDescription: "ExistingSubnetId2 (second AZ) is required for KiroCrew pack when ExistingVpcId is set — ALB needs 2 subnets in different AZs."
+        AssertDescription: "ExistingSubnetId2 (second AZ) is required for KiroCrew pack when ExistingVpcId is set - ALB needs 2 subnets in different AZs."
       - Assert: !Not [!Equals [!Ref ExistingSubnetId2, !Ref ExistingSubnetId]]
         AssertDescription: "ExistingSubnetId2 must be different from ExistingSubnetId (different AZs)."
 
@@ -545,7 +545,7 @@ Resources:
           FromPort: 80
           ToPort: 80
           CidrIp: '0.0.0.0/0'
-          Description: HTTP from CloudFront (prefix list not available in all regions — origin-verify header enforces)
+          Description: HTTP from CloudFront (prefix list not available in all regions - origin-verify header enforces)
       SecurityGroupEgress:
         - IpProtocol: '-1'
           CidrIp: '0.0.0.0/0'
@@ -614,7 +614,7 @@ Resources:
     Condition: IsKiroCrew
     Properties:
       Name: !Sub '/lowkey/${EnvironmentName}/kirocrew-origin-verify'
-      Description: Origin verify header value — CloudFront injects, ALB validates
+      Description: Origin verify header value - CloudFront injects, ALB validates
       GenerateSecretString:
         ExcludePunctuation: true
         PasswordLength: 32
@@ -794,7 +794,7 @@ Resources:
               - bedrock:ListInferenceProfiles
             Resource: '*'
 
-  # Deny policy for account_assistant — secrets, S3 objects, Lambda code
+  # Deny policy for account_assistant - secrets, S3 objects, Lambda code
   AccountAssistantDenyPolicy:
     Type: AWS::IAM::Policy
     Condition: IsAccountAssistant
@@ -1524,10 +1524,10 @@ Resources:
             --primary "${Primary}" \
             --daily-driver "${DailyDriver}" \
             --codex-model "${CodexModel}"
-          # Signal CFN success — defense-in-depth: bootstrap.sh also signals,
+          # Signal CFN success - defense-in-depth: bootstrap.sh also signals,
           # but this catches edge cases where bootstrap.sh signal fails silently.
           # CFN ignores duplicate signals, so double-fire is safe.
-          # Install cfn-bootstrap if needed — not on AL2023 by default.
+          # Install cfn-bootstrap if needed - not on AL2023 by default.
           if [[ ! -x /opt/aws/bin/cfn-signal ]]; then
             dnf install -y python3-pip 2>/dev/null || true
             pip3 install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz 2>/dev/null || true
@@ -1592,6 +1592,6 @@ Outputs:
 
   KiroCrewALBDns:
     Condition: IsKiroCrew
-    Description: KiroCrew ALB DNS name (do not access directly — use CloudFront)
+    Description: KiroCrew ALB DNS name (do not access directly - use CloudFront)
     Value: !GetAtt KiroCrewALB.DNSName
 
