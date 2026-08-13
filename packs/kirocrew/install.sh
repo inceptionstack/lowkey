@@ -300,7 +300,7 @@ if [[ -n "${PACK_ARG_API_KEY}" ]]; then
   # Also write to ~/.kiro/crew/.env — kirocrew reads this file directly
   # and does NOT pick up KIRO_API_KEY from the shell environment.
   # See: https://kiro.dev/docs/crew/configuration/
-  KIROCREW_ENV_DIR="${KIRO_USER_HOME}/.kiro/crew"
+  KIROCREW_ENV_DIR="${KIROCREW_HOME_OVERRIDE:-${KIRO_USER_HOME}/.kiro/crew}"
   KIROCREW_ENV_FILE="${KIROCREW_ENV_DIR}/.env"
   ( umask 077
     mkdir -p "${KIROCREW_ENV_DIR}"
@@ -309,7 +309,7 @@ if [[ -n "${PACK_ARG_API_KEY}" ]]; then
       grep -v '^KIRO_API_KEY=' "${KIROCREW_ENV_FILE}" > "${KIROCREW_ENV_FILE}.tmp" 2>/dev/null || true
       mv "${KIROCREW_ENV_FILE}.tmp" "${KIROCREW_ENV_FILE}"
     fi
-    printf '%s\n' "KIRO_API_KEY=${PACK_ARG_API_KEY}" >> "${KIROCREW_ENV_FILE}"
+    printf 'KIRO_API_KEY=%s\n' "${PACK_ARG_API_KEY}" >> "${KIROCREW_ENV_FILE}"
   )
   chmod 600 "${KIROCREW_ENV_FILE}"
   chown -R "${KIRO_USER}:${KIRO_USER}" "${KIROCREW_ENV_DIR}" 2>/dev/null || true
