@@ -296,6 +296,24 @@ if [[ -n "${PACK_ARG_API_KEY}" ]]; then
   fi
 
   ok "KIRO_API_KEY written to ${KIRO_ENV_FILE} (0600) and sourced from ~/.bash_profile"
+
+  # Also write to ~/.kiro/crew/.env — kirocrew reads this file directly
+  # and does NOT pick up KIRO_API_KEY from the shell environment.
+  # See: https://kiro.dev/docs/crew/configuration/
+  KIROCREW_ENV_DIR="${KIRO_USER_HOME}/.kiro/crew"
+  KIROCREW_ENV_FILE="${KIROCREW_ENV_DIR}/.env"
+  ( umask 077
+    mkdir -p "${KIROCREW_ENV_DIR}"
+    # Idempotent: remove old entry before appending
+    if [[ -f "${KIROCREW_ENV_FILE}" ]]; then
+      grep -v '^KIRO_API_KEY=' "${KIROCREW_ENV_FILE}" > "${KIROCREW_ENV_FILE}.tmp" 2>/dev/null || true
+      mv "${KIROCREW_ENV_FILE}.tmp" "${KIROCREW_ENV_FILE}"
+    fi
+    printf '%s\n' "KIRO_API_KEY=${PACK_ARG_API_KEY}" >> "${KIROCREW_ENV_FILE}"
+  )
+  chmod 600 "${KIROCREW_ENV_FILE}"
+  chown -R "${KIRO_USER}:${KIRO_USER}" "${KIROCREW_ENV_DIR}" 2>/dev/null || true
+  ok "KIRO_API_KEY also written to ${KIROCREW_ENV_FILE} (kirocrew native .env)"
 fi
 
 # ── Step 6: Install skills ────────────────────────────────────────────────────
