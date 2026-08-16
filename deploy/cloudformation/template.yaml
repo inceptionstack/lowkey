@@ -372,21 +372,30 @@ Parameters:
     Description: "Email for the initial WebUI admin user. Required when EnableWebUIAuth is true."
     AllowedPattern: '^([^@]+@[^@]+\.[^@]+)?$'
 
-  EdgeLambdaS3Bucket:
+  EdgeLambdaVersionArn:
     Type: String
     Default: ''
-    Description: "S3 bucket holding the Lambda@Edge deployment zip. Required when EnableWebUIAuth is true. Installer uploads and sets this."
+    Description: "Versioned ARN of the Lambda@Edge function (produced by the companion edge-stack in us-east-1). Required when EnableWebUIAuth is true."
 
-  EdgeLambdaS3Key:
+  EdgeConfigSecretName:
     Type: String
     Default: ''
-    Description: "S3 key of the Lambda@Edge deployment zip. Required when EnableWebUIAuth is true. Installer uploads and sets this."
+    Description: "Name of the us-east-1 Secrets Manager secret holding the merged Cognito config for the Lambda@Edge. Required when EnableWebUIAuth is true."
 
-  EdgeLambdaCodeSha256:
+  EdgeConfigSecretArn:
     Type: String
     Default: ''
-    Description: "Base64-encoded SHA256 of the Lambda@Edge zip. Required when EnableWebUIAuth is true. Forces a new AWS::Lambda::Version to be published (and picked up by CloudFront) when the code changes."
+    Description: "Full ARN of the us-east-1 edge config secret. Required when EnableWebUIAuth is true."
 
+  SigningKeySecretName:
+    Type: String
+    Default: ''
+    Description: "Name of the us-east-1 Secrets Manager secret holding the raw signing key. Required when EnableWebUIAuth is true."
+
+  SigningKeySecretArn:
+    Type: String
+    Default: ''
+    Description: "Full ARN of the us-east-1 signing key secret. Required when EnableWebUIAuth is true."
 # ============================================================================
 # RULES
 # ============================================================================
@@ -417,17 +426,19 @@ Rules:
       - Assert: !Not [!Equals [!Ref WebUIAdminEmail, '']]
         AssertDescription: "WebUIAdminEmail is required when EnableWebUIAuth is true."
 
-  WebUIEdgeRequiresUsEast1:
+  WebUIEdgeRequiresParams:
     RuleCondition: !Equals [!Ref EnableWebUIAuth, 'true']
     Assertions:
-      - Assert: !Equals [!Ref 'AWS::Region', 'us-east-1']
-        AssertDescription: "EnableWebUIAuth requires deploying in us-east-1 (Lambda@Edge is a CloudFront-only resource that must live in us-east-1)."
-      - Assert: !Not [!Equals [!Ref EdgeLambdaS3Bucket, '']]
-        AssertDescription: "EdgeLambdaS3Bucket is required when EnableWebUIAuth is true (installer uploads the Lambda@Edge zip and sets this)."
-      - Assert: !Not [!Equals [!Ref EdgeLambdaS3Key, '']]
-        AssertDescription: "EdgeLambdaS3Key is required when EnableWebUIAuth is true (installer uploads the Lambda@Edge zip and sets this)."
-      - Assert: !Not [!Equals [!Ref EdgeLambdaCodeSha256, '']]
-        AssertDescription: "EdgeLambdaCodeSha256 is required when EnableWebUIAuth is true (installer computes and sets this so AWS::Lambda::Version publishes new versions on code updates)."
+      - Assert: !Not [!Equals [!Ref EdgeLambdaVersionArn, '']]
+        AssertDescription: "EdgeLambdaVersionArn is required when EnableWebUIAuth is true (installer deploys the companion edge stack in us-east-1 first and passes its outputs to this stack)."
+      - Assert: !Not [!Equals [!Ref EdgeConfigSecretName, '']]
+        AssertDescription: "EdgeConfigSecretName is required when EnableWebUIAuth is true (from the edge stack outputs)."
+      - Assert: !Not [!Equals [!Ref EdgeConfigSecretArn, '']]
+        AssertDescription: "EdgeConfigSecretArn is required when EnableWebUIAuth is true (from the edge stack outputs)."
+      - Assert: !Not [!Equals [!Ref SigningKeySecretName, '']]
+        AssertDescription: "SigningKeySecretName is required when EnableWebUIAuth is true (from the edge stack outputs)."
+      - Assert: !Not [!Equals [!Ref SigningKeySecretArn, '']]
+        AssertDescription: "SigningKeySecretArn is required when EnableWebUIAuth is true (from the edge stack outputs)."
 
 # ============================================================================
 # CONDITIONS
@@ -702,7 +713,7 @@ Resources:
           LambdaFunctionAssociations: !If
             - EnableWebUI
             - - EventType: viewer-request
-                LambdaFunctionARN: !Ref WebUIEdgeLambdaVersion
+                LambdaFunctionARN: !Ref EdgeLambdaVersionArn
                 IncludeBody: false
             - !Ref 'AWS::NoValue'
         Origins:
@@ -1561,11 +1572,11 @@ Resources:
                   - secretsmanager:UpdateSecret
                 Resource:
                   - !Ref WebUIAdminSecret
-                  - !Ref WebUIEdgeConfigSecret
+                  - !Ref EdgeConfigSecretArn
               - Effect: Allow
                 Action:
                   - secretsmanager:GetSecretValue
-                Resource: !Ref WebUIEdgeSigningKeySecret
+                Resource: !Ref SigningKeySecretArn
 
   WebUIUserCreationFunction:
     Type: AWS::Lambda::Function
@@ -1726,8 +1737,6 @@ Resources:
     DependsOn:
       - WebUIUserPool
       - WebUIUserPoolClient
-      - WebUIEdgeSigningKeySecret
-      - WebUIEdgeConfigSecret
     Properties:
       ServiceToken: !GetAtt WebUIUserCreationFunction.Arn
       UserPoolId: !Ref WebUIUserPool
@@ -1735,8 +1744,11 @@ Resources:
       CognitoDomain: !Sub '${WebUIUserPoolDomain}.auth.${AWS::Region}.amazoncognito.com'
       AdminEmail: !Ref WebUIAdminEmail
       AdminSecretArn: !Ref WebUIAdminSecret
-      EdgeConfigSecretArn: !Ref WebUIEdgeConfigSecret
-      SigningKeySecretArn: !Ref WebUIEdgeSigningKeySecret
+      EdgeConfigSecretName: !Ref EdgeConfigSecretName
+      EdgeConfigSecretArn: !Ref EdgeConfigSecretArn
+      SigningKeySecretName: !Ref SigningKeySecretName
+      SigningKeySecretArn: !Ref SigningKeySecretArn
+      EdgeRegion: 'us-east-1'
       Region: !Ref 'AWS::Region'
 
   # --------------------------------------------------------------------------
@@ -1749,95 +1761,6 @@ Resources:
   # - EdgeConfigSecret: the merged config {poolId, clientId, cognitoDomain,
   #   signingKey} that the Lambda@Edge reads at cold start. Populated by the
   #   Custom Resource after Cognito resources are created.
-  WebUIEdgeSigningKeySecret:
-    Type: AWS::SecretsManager::Secret
-    Condition: EnableWebUI
-    Properties:
-      Name: !Sub '/lowkey/${EnvironmentName}/webui-edge-signing-key'
-      Description: !Sub 'Raw HMAC signing key for KiroCrew WebUI Lambda@Edge (${EnvironmentName})'
-      GenerateSecretString:
-        SecretStringTemplate: '{}'
-        GenerateStringKey: 'key'
-        PasswordLength: 64
-        ExcludePunctuation: true
-      Tags:
-        - Key: loki:managed
-          Value: 'true'
-        - Key: loki:pack
-          Value: !Ref PackName
-        - Key: loki:env
-          Value: !Ref EnvironmentName
-
-  WebUIEdgeConfigSecret:
-    Type: AWS::SecretsManager::Secret
-    Condition: EnableWebUI
-    Properties:
-      Name: !Sub '/lowkey/${EnvironmentName}/webui-edge-config'
-      Description: !Sub 'Merged Cognito config for KiroCrew WebUI Lambda@Edge (${EnvironmentName})'
-      SecretString: !Sub '{"poolId":"pending","clientId":"pending","cognitoDomain":"pending","signingKey":"pending"}'
-      Tags:
-        - Key: loki:managed
-          Value: 'true'
-        - Key: loki:pack
-          Value: !Ref PackName
-        - Key: loki:env
-          Value: !Ref EnvironmentName
-
-  WebUIEdgeLambdaRole:
-    Type: AWS::IAM::Role
-    Condition: EnableWebUI
-    Properties:
-      RoleName: !Sub '${EnvironmentName}-webui-edge-role'
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - lambda.amazonaws.com
-                - edgelambda.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyName: FetchEdgeConfig
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - secretsmanager:GetSecretValue
-                Resource: !Ref WebUIEdgeConfigSecret
-
-  WebUIEdgeLambdaFunction:
-    Type: AWS::Lambda::Function
-    Condition: EnableWebUI
-    DependsOn:
-      - WebUIEdgeSigningKeySecret
-      - WebUIUserPoolClient
-    Properties:
-      FunctionName: !Sub '${EnvironmentName}-webui-edge-auth'
-      Runtime: nodejs18.x
-      Handler: index.handler
-      MemorySize: 128
-      Timeout: 5
-      Role: !GetAtt WebUIEdgeLambdaRole.Arn
-      Code:
-        S3Bucket: !Ref EdgeLambdaS3Bucket
-        S3Key: !Ref EdgeLambdaS3Key
-
-  # Version is required for LambdaFunctionAssociations; publishing a new version
-  # is how updates roll out to CloudFront edges. CodeSha256 makes the resource
-  # non-immutable across deploys: when the zip changes, the SHA changes, CFN
-  # sees a diff and publishes a new version (which CloudFront then picks up).
-  WebUIEdgeLambdaVersion:
-    Type: AWS::Lambda::Version
-    Condition: EnableWebUI
-    Properties:
-      FunctionName: !Ref WebUIEdgeLambdaFunction
-      Description: !Sub 'KiroCrew WebUI Cognito auth (${EnvironmentName}) sha256=${EdgeLambdaCodeSha256}'
-      CodeSha256: !Ref EdgeLambdaCodeSha256
-
   # SSM Session Manager Preferences (auto-login as ec2-user with welcome)
   # --------------------------------------------------------------------------
   # --------------------------------------------------------------------------
