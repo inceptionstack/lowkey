@@ -1596,7 +1596,7 @@ Resources:
               cognito.admin_set_user_password(
                   UserPoolId=pool_id,
                   Username=email,
-                  Password=***
+                  Password=password,
                   Permanent=True
               )
 
@@ -1640,7 +1640,7 @@ Resources:
                       if old_email and old_email != email:
                           delete_user_safely(cognito, pool_id, old_email)
 
-                  password = ***)
+                  password = generate_password()
                   create_or_reset_user(cognito, pool_id, email, password)
                   write_secret(sm, secret_arn, email, password)
 
