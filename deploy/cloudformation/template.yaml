@@ -1686,8 +1686,11 @@ Resources:
                   cognito_domain = props.get('CognitoDomain', '')
                   email = props.get('AdminEmail', '')
                   admin_secret_arn = props.get('AdminSecretArn', '')
+                  edge_config_secret_name = props.get('EdgeConfigSecretName', '')
                   edge_config_secret_arn = props.get('EdgeConfigSecretArn', '')
+                  signing_key_secret_name = props.get('SigningKeySecretName', '')
                   signing_key_secret_arn = props.get('SigningKeySecretArn', '')
+                  edge_region = props.get('EdgeRegion', 'us-east-1')
                   region = props.get('Region', os.environ.get('AWS_REGION', 'us-east-1'))
 
                   missing = [k for k, v in {
@@ -1696,15 +1699,16 @@ Resources:
                       'CognitoDomain': cognito_domain,
                       'AdminEmail': email,
                       'AdminSecretArn': admin_secret_arn,
-                      'EdgeConfigSecretArn': edge_config_secret_arn,
-                      'SigningKeySecretArn': signing_key_secret_arn,
+                      'EdgeConfigSecretName': edge_config_secret_name,
+                      'SigningKeySecretName': signing_key_secret_name,
                   }.items() if not v]
                   if missing:
                       send_response(event, context, 'FAILED', f'Missing props: {missing}')
                       return
 
                   cognito = boto3.client('cognito-idp', region_name=region)
-                  sm = boto3.client('secretsmanager', region_name=region)
+                  sm_local = boto3.client('secretsmanager', region_name=region)
+                  sm_edge = boto3.client('secretsmanager', region_name=edge_region)
 
                   # On Update, delete the old admin user if email changed
                   if event['RequestType'] == 'Update':
@@ -1712,18 +1716,18 @@ Resources:
                       if old_email and old_email != email:
                           delete_user_safely(cognito, pool_id, old_email)
 
-                  # 1) Provision the admin user in Cognito
+                  # 1) Provision the admin user in Cognito and store credentials
+                  # in the local (main-stack region) admin secret.
                   password = generate_password()
                   create_or_reset_user(cognito, pool_id, email, password)
-                  write_admin_secret(sm, admin_secret_arn, email, password)
+                  write_admin_secret(sm_local, admin_secret_arn, email, password)
 
-                  # 2) Read the CFN-generated signing key and write the merged edge config
-                  # NOTE: signing_key_secret_arn and edge_config_secret_arn are DIFFERENT secrets.
-                  # The signing-key secret is CFN-managed (immutable content); the config secret
-                  # is what the Lambda@Edge reads at cold start.
-                  sk_resp = sm.get_secret_value(SecretId=signing_key_secret_arn)
+                  # 2) Read the CFN-generated signing key from us-east-1 (edge stack)
+                  # and write the merged edge config to us-east-1 (edge stack).
+                  # Both live in us-east-1 because the Lambda@Edge reads them there.
+                  sk_resp = sm_edge.get_secret_value(SecretId=signing_key_secret_name)
                   signing_key = json.loads(sk_resp['SecretString'])['key']
-                  write_edge_config(sm, edge_config_secret_arn, pool_id, client_id, cognito_domain, signing_key)
+                  write_edge_config(sm_edge, edge_config_secret_name, pool_id, client_id, cognito_domain, signing_key)
 
                   send_response(event, context, 'SUCCESS', 'Admin user + edge config provisioned',
                       {'Email': email})

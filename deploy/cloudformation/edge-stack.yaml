@@ -100,11 +100,9 @@ Resources:
 
   WebUIEdgeLambdaFunction:
     Type: AWS::Lambda::Function
-    DependsOn:
-      - WebUIEdgeConfigSecret
     Properties:
       FunctionName: !Sub '${EnvironmentName}-webui-edge-auth'
-      Runtime: nodejs18.x
+      Runtime: nodejs20.x
       Handler: index.handler
       MemorySize: 128
       Timeout: 5
@@ -130,16 +128,16 @@ Outputs:
     Value: !GetAtt WebUIEdgeLambdaFunction.Arn
 
   EdgeConfigSecretName:
-    Description: "Name of the Secrets Manager secret holding the merged edge config. Main stack's Custom Resource writes to this via cross-region SM client."
-    Value: !Ref WebUIEdgeConfigSecret
+    Description: "Deterministic name of the merged edge config secret. Custom Resource in the main stack uses this via a cross-region Secrets Manager client."
+    Value: !Sub '/lowkey/${EnvironmentName}/webui-edge-config'
 
   EdgeConfigSecretArn:
     Description: "Full ARN of the edge config secret."
     Value: !Ref WebUIEdgeConfigSecret
 
   SigningKeySecretName:
-    Description: "Name of the Secrets Manager secret holding the raw signing key."
-    Value: !Ref WebUIEdgeSigningKeySecret
+    Description: "Deterministic name of the raw signing key secret."
+    Value: !Sub '/lowkey/${EnvironmentName}/webui-edge-signing-key'
 
   SigningKeySecretArn:
     Description: "Full ARN of the signing key secret."
