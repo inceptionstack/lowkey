@@ -1908,15 +1908,73 @@ choose_pack() {
     return
   fi
 
+  # Simple mode + non-interactive: auto-select kirocrew without gum
+  if [[ "$INSTALL_MODE" == "simple" && "$AUTO_YES" == true ]]; then
+    PACK_NAME="kirocrew"
+    # Validate kirocrew exists in registry; fall back to openclaw
+    local found_auto=false
+    for i in "${!PACK_NAMES[@]}"; do
+      if [[ "${PACK_NAMES[$i]}" == "$PACK_NAME" ]]; then
+        found_auto=true
+        break
+      fi
+    done
+    if [[ "$found_auto" != true ]]; then
+      PACK_NAME="openclaw"
+      warn "kirocrew not found in registry — falling back to openclaw"
+    fi
+    ok "Agent: ${PACK_NAME} (auto-selected)"
+    return
+  fi
+
   # Interactive: build display items for gum choose
   local -a gum_items=()
   local default_item=""
-  for i in "${!PACK_NAMES[@]}"; do
-    local item="${PACK_NAMES[$i]} — ${PACK_DESCS[$i]}"
-    [[ "${PACK_EXPERIMENTAL[$i]}" == "true" ]] && item+=" (experimental)"
-    gum_items+=("$item")
-    [[ "${PACK_NAMES[$i]}" == "openclaw" ]] && default_item="$item"
-  done
+  local pname="" item="" in_list=false sp=""
+
+  # Simple mode: curated list (order preserved) with UI-type hints
+  local -a simple_packs=(kirocrew openclaw hermes claude-code codex-cli kiro-cli troika)
+  local -a webui_packs=(kirocrew)
+
+  if [[ "$INSTALL_MODE" == "simple" ]]; then
+    # Iterate in curated order to guarantee display position
+    for sp in "${simple_packs[@]}"; do
+      for i in "${!PACK_NAMES[@]}"; do
+        [[ "${PACK_NAMES[$i]}" == "$sp" ]] || continue
+        pname="${PACK_NAMES[$i]}"
+
+        # Determine UI type prefix
+        in_list=false
+        for wp in "${webui_packs[@]}"; do
+          [[ "$pname" == "$wp" ]] && in_list=true && break
+        done
+        if [[ "$in_list" == true ]]; then
+          item="[WebUI] ${pname} — ${PACK_DESCS[$i]}"
+        else
+          item="[Terminal] ${pname} — ${PACK_DESCS[$i]}"
+        fi
+        [[ "${PACK_EXPERIMENTAL[$i]}" == "true" ]] && item+=" (experimental)"
+
+        gum_items+=("$item")
+        [[ "$pname" == "kirocrew" ]] && default_item="$item"
+        break
+      done
+    done
+  else
+    # Advanced mode: show all packs in registry order, no UI-type labels
+    for i in "${!PACK_NAMES[@]}"; do
+      pname="${PACK_NAMES[$i]}"
+      item="${pname} — ${PACK_DESCS[$i]}"
+      [[ "${PACK_EXPERIMENTAL[$i]}" == "true" ]] && item+=" (experimental)"
+      gum_items+=("$item")
+      [[ "$pname" == "openclaw" ]] && default_item="$item"
+    done
+  fi
+
+  # Fallback: if intended default wasn't found, use first item
+  if [[ -z "$default_item" && ${#gum_items[@]} -gt 0 ]]; then
+    default_item="${gum_items[0]}"
+  fi
   local pack_choice
   local header="${1:-Agent to deploy}"
   _gum_or_die pack_choice $GUM choose --header "$header" \
@@ -1924,6 +1982,7 @@ choose_pack() {
     "${gum_items[@]}" \
     || { fail "Pack selection is required"; }
   PACK_NAME="${pack_choice%% —*}"
+  PACK_NAME="${PACK_NAME##*] }"  # Strip [WebUI]/[Terminal] prefix if present
   for i in "${!PACK_NAMES[@]}"; do
     if [[ "${PACK_NAMES[$i]}" == "$PACK_NAME" && "${PACK_EXPERIMENTAL[$i]}" == "true" ]]; then
       warn "${PACK_NAME} is experimental — expect rough edges"
