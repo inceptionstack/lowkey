@@ -55,6 +55,11 @@ async function getAuthenticator() {
       userPoolId: cfg.poolId,
       userPoolAppId: cfg.clientId,
       userPoolDomain: cfg.cognitoDomain,
+      // Must match a CallbackURL registered on the Cognito user pool client
+      // in the main-stack template (`/auth/callback`). Without this,
+      // cognito-at-edge defaults to `/parseauth`, which Cognito rejects
+      // because it's not in the client's CallbackURLs allowlist.
+      parseAuthPath: '/auth/callback',
       cookieExpirationDays: 1,
       disableCookieDomain: true,
       logLevel: 'warn',
