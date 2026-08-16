@@ -360,6 +360,18 @@ Parameters:
     Default: 'main'
     Description: "Git branch to clone on the EC2 instance. Use for testing feature branches."
 
+  EnableWebUIAuth:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: "Enable Cognito-based WebUI authentication for KiroCrew dashboard."
+
+  WebUIAdminEmail:
+    Type: String
+    Default: ''
+    Description: "Email for the initial WebUI admin user. Required when EnableWebUIAuth is true."
+    AllowedPattern: '^([^@]+@[^@]+\.[^@]+)?$'
+
 # ============================================================================
 # RULES
 # ============================================================================
@@ -401,6 +413,9 @@ Conditions:
   RunSecurityServices: !Not [!Condition IsPersonalAssistant]
   RunBedrockForm: !Equals [!Ref EnableBedrockForm, 'true']
   IsKiroCrew: !Equals [!Ref PackName, 'kirocrew']
+  EnableWebUI: !And
+    - !Condition IsKiroCrew
+    - !Equals [!Ref EnableWebUIAuth, 'true']
   # KiroCrewSubnet2 (in-template second AZ subnet) only needed on new-VPC path;
   # existing-VPC path uses ExistingSubnetId2 passed by the caller.
   KiroCrewNeedsSubnet2: !And
@@ -1387,6 +1402,203 @@ Resources:
       ServiceToken: !GetAtt KiroCrewDashboardConfigFunction.Arn
       InstanceId: !Ref Instance
       DashboardUrl: !Sub 'https://${KiroCrewDistribution.DomainName}'
+      Region: !Ref 'AWS::Region'
+
+  # --------------------------------------------------------------------------
+  # WebUI Authentication (Cognito) — created only for KiroCrew with auth enabled
+  # --------------------------------------------------------------------------
+  WebUIUserPool:
+    Type: AWS::Cognito::UserPool
+    Condition: EnableWebUI
+    Properties:
+      UserPoolName: !Sub 'lowkey-${PackName}-${EnvironmentName}'
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          TemporaryPasswordValidityDays: 1
+      Schema:
+        - Name: email
+          Required: true
+          Mutable: true
+      UserPoolTags:
+        loki:managed: 'true'
+        loki:pack: !Ref PackName
+        loki:env: !Ref EnvironmentName
+
+  WebUIUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Condition: EnableWebUI
+    Properties:
+      UserPoolId: !Ref WebUIUserPool
+      Domain: !Sub 'lowkey-${PackName}-${EnvironmentName}'
+
+  WebUIUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Condition: EnableWebUI
+    DependsOn: KiroCrewDistribution
+    Properties:
+      UserPoolId: !Ref WebUIUserPool
+      ClientName: !Sub '${PackName}-webui'
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      SupportedIdentityProviders:
+        - COGNITO
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes:
+        - openid
+        - email
+      CallbackURLs:
+        - !Sub 'https://${KiroCrewDistribution.DomainName}/auth/callback'
+        - 'http://localhost:5476/auth/callback'
+      LogoutURLs:
+        - !Sub 'https://${KiroCrewDistribution.DomainName}/'
+        - 'http://localhost:5476/'
+      PreventUserExistenceErrors: ENABLED
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+
+  WebUIUserCreationRole:
+    Type: AWS::IAM::Role
+    Condition: EnableWebUI
+    Properties:
+      RoleName: !Sub '${EnvironmentName}-webui-user-creation-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: CognitoUserCreation
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cognito-idp:AdminCreateUser
+                  - cognito-idp:AdminSetUserPassword
+                Resource: !GetAtt WebUIUserPool.Arn
+
+  WebUIUserCreationFunction:
+    Type: AWS::Lambda::Function
+    Condition: EnableWebUI
+    Properties:
+      FunctionName: !Sub '${EnvironmentName}-webui-user-creation'
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 60
+      Role: !GetAtt WebUIUserCreationRole.Arn
+      Code:
+        ZipFile: |
+          import json, urllib.request, secrets, string, boto3
+
+          def send_response(event, context, status, reason='', data={}):
+              reason_str = (reason or f'See CW: {context.log_stream_name}')[:256]
+              phys_id = (context.log_stream_name or 'custom-resource')[-64:]
+              safe_data = {k: str(v)[:128] for k, v in (data or {}).items()}
+              body = json.dumps({
+                  'Status': status, 'Reason': reason_str,
+                  'PhysicalResourceId': phys_id,
+                  'StackId': event['StackId'],
+                  'RequestId': event['RequestId'],
+                  'LogicalResourceId': event['LogicalResourceId'],
+                  'Data': safe_data if len(json.dumps(safe_data)) < 1024 else {}
+              }).encode()
+              req = urllib.request.Request(event['ResponseURL'], data=body,
+                  headers={'Content-Type': 'application/json', 'Content-Length': len(body)},
+                  method='PUT')
+              urllib.request.urlopen(req)
+
+          def generate_password():
+              upper = secrets.choice(string.ascii_uppercase)
+              lower = secrets.choice(string.ascii_lowercase)
+              digit = secrets.choice(string.digits)
+              symbol = secrets.choice('!@#$%&*')
+              remainder = [secrets.choice(string.ascii_letters + string.digits + '!@#$%&*') for _ in range(12)]
+              pwd = [upper, lower, digit, symbol] + remainder
+              secrets.SystemRandom().shuffle(pwd)
+              return ''.join(pwd)
+
+          def handler(event, context):
+              print(f'[INFO] Event: {json.dumps(event)}')
+              if event['RequestType'] == 'Delete':
+                  send_response(event, context, 'SUCCESS', 'Delete is a no-op')
+                  return
+
+              props = event.get('ResourceProperties', {})
+              pool_id = props.get('UserPoolId', '')
+              email = props.get('AdminEmail', '')
+              region = props.get('Region', 'us-east-1')
+
+              if not pool_id or not email:
+                  send_response(event, context, 'FAILED', 'Missing UserPoolId or AdminEmail')
+                  return
+
+              cognito = boto3.client('cognito-idp', region_name=region)
+              password = generate_password()
+
+              try:
+                  cognito.admin_create_user(
+                      UserPoolId=pool_id,
+                      Username=email,
+                      UserAttributes=[
+                          {'Name': 'email', 'Value': email},
+                          {'Name': 'email_verified', 'Value': 'true'}
+                      ],
+                      MessageAction='SUPPRESS'
+                  )
+              except cognito.exceptions.UsernameExistsException:
+                  send_response(event, context, 'SUCCESS', 'User already exists',
+                      {'Email': email, 'Password': '(existing user - password unchanged)'})
+                  return
+              except Exception as e:\n                  send_response(event, context, 'FAILED', f'User creation failed: {str(e)[:200]}')
+                  return
+
+              try:
+                  cognito.admin_set_user_password(
+                      UserPoolId=pool_id,
+                      Username=email,
+                      Password=password,
+                      Permanent=True
+                  )
+              except Exception as e:\n                  send_response(event, context, 'FAILED', f'Password set failed: {str(e)[:200]}')
+                  return
+
+              send_response(event, context, 'SUCCESS', 'Initial user created',
+                  {'Email': email, 'Password': password})
+
+  WebUIUserCreationResource:
+    Type: Custom::WebUIUserCreation
+    Condition: EnableWebUI
+    DependsOn:
+      - WebUIUserPool
+      - WebUIUserPoolClient
+    Properties:
+      ServiceToken: !GetAtt WebUIUserCreationFunction.Arn
+      UserPoolId: !Ref WebUIUserPool
+      AdminEmail: !Ref WebUIAdminEmail
       Region: !Ref 'AWS::Region'
 
   # SSM Session Manager Preferences (auto-login as ec2-user with welcome)
