@@ -2490,6 +2490,16 @@ format_cfn_cli_params() {
   echo "$params"
 }
 
+# Format params for CFN deploy --parameter-overrides (Key=Value)
+format_cfn_deploy_params() {
+  local params=""
+  for i in "${!PARAM_CFN_NAMES[@]}"; do
+    [[ -n "$params" ]] && params+=" "
+    params+="${PARAM_CFN_NAMES[$i]}=${PARAM_VALUES[$i]}"
+  done
+  echo "$params"
+}
+
 show_summary() {
   step "Review & confirm"
 
@@ -2680,23 +2690,21 @@ deploy_cfn_stack() {
   aws s3 cp "$template" "s3://${bucket}/lowkey/template.yaml" --region "$DEPLOY_REGION" >/dev/null \
     || fail "Failed to upload template to S3"
 
-  # Pre-signed URL (bucket blocks public access)
-  local s3_url
-  s3_url=$(aws s3 presign "s3://${bucket}/lowkey/template.yaml" \
-    --expires-in 3600 --region "$DEPLOY_REGION") \
-    || fail "Could not generate pre-signed URL for template"
-
+  # aws cloudformation deploy is idempotent: it creates a missing stack and
+  # updates an existing one. --no-fail-on-empty-changeset makes reruns safe.
   # shellcheck disable=SC2046
-  aws cloudformation create-stack \
+  aws cloudformation deploy \
     --stack-name "$STACK_NAME" \
-    --template-url "$s3_url" \
+    --template-file "$template" \
+    --s3-bucket "$bucket" \
+    --s3-prefix lowkey/deploy \
     --region "$DEPLOY_REGION" \
     --capabilities $capabilities \
-    --parameters $(format_cfn_cli_params) \
-    --output text --query 'StackId'
+    --parameter-overrides $(format_cfn_deploy_params) \
+    --no-fail-on-empty-changeset \
+    || fail "CloudFormation deployment failed"
 
-  info "Stack creating... this takes ~8-10 minutes"
-  wait_for_cfn_stack
+  info "Stack deployment complete"
 
   INSTANCE_ID=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$DEPLOY_REGION" \
     --query 'Stacks[0].Outputs[?OutputKey==`InstanceId`].OutputValue' --output text)

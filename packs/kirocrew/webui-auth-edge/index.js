@@ -7,7 +7,7 @@
  *
  * Lambda@Edge constraints:
  *   - No environment variables (config baked in below OR fetched from Secrets Manager)
- *   - Node.js 18.x runtime
+ *   - Node.js 22.x runtime
  *   - Must be deployed in us-east-1 (enforced by CFN Rule WebUIEdgeRequiresUsEast1)
  *
  * Only CONFIG_SECRET_NAME is substituted at build time. All other config
@@ -28,7 +28,9 @@ const {
 const CONFIG_SECRET_NAME = '__CONFIG_SECRET_NAME__';
 const SECRETS_REGION = 'us-east-1';
 
+const AUTHENTICATOR_CACHE_TTL_MS = 15 * 60 * 1000;
 let authenticatorPromise = null;
+let authenticatorCacheTimestamp = 0;
 
 async function loadConfig() {
   const sm = new SecretsManagerClient({ region: SECRETS_REGION });
@@ -43,7 +45,12 @@ async function loadConfig() {
 }
 
 async function getAuthenticator() {
-  if (authenticatorPromise) return authenticatorPromise;
+  const now = Date.now();
+  if (authenticatorPromise && now - authenticatorCacheTimestamp <= AUTHENTICATOR_CACHE_TTL_MS) {
+    return authenticatorPromise;
+  }
+  authenticatorPromise = null;
+  authenticatorCacheTimestamp = now;
   authenticatorPromise = (async () => {
     const cfg = await loadConfig();
     return new Authenticator({
@@ -61,6 +68,9 @@ async function getAuthenticator() {
       // because it's not in the client's CallbackURLs allowlist.
       parseAuthPath: '/auth/callback',
       cookieExpirationDays: 1,
+      cookiePath: '/',
+      httpOnly: true,
+      sameSite: 'Lax',
       disableCookieDomain: true,
       logLevel: 'warn',
       csrfProtection: {
@@ -69,6 +79,7 @@ async function getAuthenticator() {
     });
   })().catch((err) => {
     authenticatorPromise = null;
+    authenticatorCacheTimestamp = 0;
     throw err;
   });
   return authenticatorPromise;
