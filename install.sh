@@ -2158,9 +2158,8 @@ configure_webui_auth() {
 # ============================================================================
 # WebUI Lambda@Edge zip build + S3 upload (KiroCrew, when auth enabled)
 # ============================================================================
-# Builds the Cognito-at-Edge zip, uploads it to the CFN templates bucket, and
-# exports EDGE_LAMBDA_S3_BUCKET/EDGE_LAMBDA_S3_KEY so build_deploy_params can
-# feed them to the stack as CFN parameters.
+# Builds the Cognito-at-Edge zip, uploads it to a dedicated us-east-1 bucket,
+# and exports the edge artifact details for deploy_edge_stack.
 build_and_upload_edge_lambda() {
   [[ "${WEBUI_AUTH_ENABLED:-false}" == "true" ]] || return 0
   [[ "$PACK_NAME" == "kirocrew" ]] || return 0
@@ -2194,26 +2193,25 @@ build_and_upload_edge_lambda() {
     fail "Edge Lambda build script did not produce a zip: $zip_path"
   fi
 
-  local bucket="${ENV_NAME}-cfn-templates-${ACCOUNT_ID}"
+  local bucket="${ENV_NAME}-edge-${ACCOUNT_ID}"
   local key="edge/$(basename "$zip_path")"
 
-  # The CFN templates bucket was created by deploy_cfn_stack in earlier flows,
-  # but Lambda@Edge zip must be uploaded BEFORE the stack that references it.
-  # Ensure the bucket exists (idempotent).
-  if ! aws s3api head-bucket --bucket "$bucket" --region "$DEPLOY_REGION" 2>/dev/null; then
+  # Lambda@Edge requires its source bucket to be in us-east-1. Ensure the
+  # dedicated bucket exists (idempotent), independently of the main-region
+  # CloudFormation templates bucket.
+  if ! aws s3api head-bucket --bucket "$bucket" --region us-east-1 2>/dev/null; then
     info "Creating edge Lambda bucket: $bucket"
-    aws s3api create-bucket --bucket "$bucket" --region "$DEPLOY_REGION" \
-      $(if [[ "$DEPLOY_REGION" != "us-east-1" ]]; then echo "--create-bucket-configuration LocationConstraint=$DEPLOY_REGION"; fi) \
+    aws s3api create-bucket --bucket "$bucket" --region us-east-1 \
       >/dev/null 2>&1 || fail "Failed to create bucket $bucket"
-    aws s3api put-bucket-versioning --bucket "$bucket" \
-      --versioning-configuration Status=Enabled --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
-    aws s3api put-public-access-block --bucket "$bucket" --region "$DEPLOY_REGION" \
-      --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true \
-      >/dev/null 2>&1 || true
   fi
+  aws s3api put-bucket-versioning --bucket "$bucket" --versioning-configuration Status=Enabled \
+    --region us-east-1 >/dev/null 2>&1 || fail "Failed to enable versioning on $bucket"
+  aws s3api put-public-access-block --bucket "$bucket" --region us-east-1 \
+    --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true \
+    >/dev/null 2>&1 || fail "Failed to block public access on $bucket"
 
   info "Uploading edge Lambda zip: s3://${bucket}/${key} ($(wc -c < "$zip_path") bytes)"
-  aws s3 cp "$zip_path" "s3://${bucket}/${key}" --region "$DEPLOY_REGION" >/dev/null \
+  aws s3 cp "$zip_path" "s3://${bucket}/${key}" --region us-east-1 >/dev/null \
     || fail "Failed to upload edge Lambda zip"
 
   # Compute base64-encoded SHA256 of the zip. CFN needs this on the
@@ -2224,10 +2222,44 @@ build_and_upload_edge_lambda() {
   code_sha256=$(openssl dgst -sha256 -binary "$zip_path" | openssl base64 -A) \
     || fail "Failed to compute SHA256 of edge Lambda zip"
 
-  export EDGE_LAMBDA_S3_BUCKET="$bucket"
-  export EDGE_LAMBDA_S3_KEY="$key"
-  export EDGE_LAMBDA_CODE_SHA256="$code_sha256"
+  export EDGE_S3_BUCKET_US_EAST_1="$bucket"
+  export EDGE_S3_KEY="$key"
+  export EDGE_CODE_SHA256="$code_sha256"
   ok "Edge Lambda uploaded"
+}
+
+deploy_edge_stack() {
+  [[ "${WEBUI_AUTH_ENABLED:-false}" == "true" ]] || return 0
+  [[ "$PACK_NAME" == "kirocrew" ]] || return 0
+
+  local edge_stack_name="${ENV_NAME}-edge-stack"
+  step "Deploy WebUI Lambda@Edge companion stack"
+  if ! aws cloudformation deploy \
+    --template-file "${CLONE_DIR}/deploy/cloudformation/edge-stack.yaml" \
+    --stack-name "$edge_stack_name" \
+    --region us-east-1 \
+    --capabilities CAPABILITY_NAMED_IAM \
+    --parameter-overrides \
+      "EnvironmentName=${ENV_NAME}" "PackName=${PACK_NAME}" \
+      "EdgeLambdaS3Bucket=${EDGE_S3_BUCKET_US_EAST_1}" \
+      "EdgeLambdaS3Key=${EDGE_S3_KEY}" "EdgeLambdaCodeSha256=${EDGE_CODE_SHA256}"; then
+    fail "Lambda@Edge companion stack deployment failed; main stack was not started"
+  fi
+
+  local outputs
+  outputs=$(aws cloudformation describe-stacks --stack-name "$edge_stack_name" --region us-east-1 \
+    --query 'Stacks[0].Outputs' --output json) \
+    || fail "Could not read outputs from Lambda@Edge companion stack"
+  EDGE_LAMBDA_VERSION_ARN=$(printf '%s' "$outputs" | jq -r '.[] | select(.OutputKey=="EdgeLambdaVersionArn") | .OutputValue')
+  EDGE_CONFIG_SECRET_NAME=$(printf '%s' "$outputs" | jq -r '.[] | select(.OutputKey=="EdgeConfigSecretName") | .OutputValue')
+  EDGE_CONFIG_SECRET_ARN=$(printf '%s' "$outputs" | jq -r '.[] | select(.OutputKey=="EdgeConfigSecretArn") | .OutputValue')
+  SIGNING_KEY_SECRET_NAME=$(printf '%s' "$outputs" | jq -r '.[] | select(.OutputKey=="SigningKeySecretName") | .OutputValue')
+  SIGNING_KEY_SECRET_ARN=$(printf '%s' "$outputs" | jq -r '.[] | select(.OutputKey=="SigningKeySecretArn") | .OutputValue')
+  export EDGE_LAMBDA_VERSION_ARN EDGE_CONFIG_SECRET_NAME EDGE_CONFIG_SECRET_ARN
+  export SIGNING_KEY_SECRET_NAME SIGNING_KEY_SECRET_ARN
+  [[ -n "$EDGE_LAMBDA_VERSION_ARN" && "$EDGE_LAMBDA_VERSION_ARN" != null ]] \
+    || fail "Lambda@Edge companion stack returned no version ARN"
+  ok "Lambda@Edge companion stack deployed"
 }
 
 
@@ -2364,7 +2396,7 @@ collect_security_config() {
 # Parameter source-of-truth: single mapping for CFN Console and CFN CLI
 # ============================================================================
 # ⚠ KEEP THESE TWO ARRAYS IN SYNC — same order, same count
-PARAM_CFN_NAMES=(EnvironmentName PackName ProfileName InstanceType DefaultModel ModelMode BedrockRegion LokiWatermark EnableBedrockForm EnableSecurityHub EnableGuardDuty EnableInspector EnableAccessAnalyzer EnableConfigRecorder ExistingVpcId ExistingSubnetId ExistingSubnetId2 RepoBranch KiroFromSecret TelegramBotTokenSecret TelegramUser Primary DailyDriver CodexModel EnableWebUIAuth WebUIAdminEmail EdgeLambdaS3Bucket EdgeLambdaS3Key EdgeLambdaCodeSha256)
+PARAM_CFN_NAMES=(EnvironmentName PackName ProfileName InstanceType DefaultModel ModelMode BedrockRegion LokiWatermark EnableBedrockForm EnableSecurityHub EnableGuardDuty EnableInspector EnableAccessAnalyzer EnableConfigRecorder ExistingVpcId ExistingSubnetId ExistingSubnetId2 RepoBranch KiroFromSecret TelegramBotTokenSecret TelegramUser Primary DailyDriver CodexModel EnableWebUIAuth WebUIAdminEmail EdgeLambdaVersionArn EdgeConfigSecretName EdgeConfigSecretArn SigningKeySecretName SigningKeySecretArn)
 PARAM_VALUES=()  # populated by build_deploy_params()
 
 # Per-pack default model (passed to CFN DefaultModel / bootstrap.sh --model).
@@ -2426,9 +2458,11 @@ build_deploy_params() {
     "${TROIKA_CODEX_MODEL:-openai.gpt-5.5}"
     "${WEBUI_AUTH_ENABLED:-false}"
     "${WEBUI_ADMIN_EMAIL:-}"
-    "${EDGE_LAMBDA_S3_BUCKET:-}"
-    "${EDGE_LAMBDA_S3_KEY:-}"
-    "${EDGE_LAMBDA_CODE_SHA256:-}"
+    "${EDGE_LAMBDA_VERSION_ARN:-}"
+    "${EDGE_CONFIG_SECRET_NAME:-}"
+    "${EDGE_CONFIG_SECRET_ARN:-}"
+    "${SIGNING_KEY_SECRET_NAME:-}"
+    "${SIGNING_KEY_SECRET_ARN:-}"
   )
   # Validate parallel arrays are in sync
   [[ ${#PARAM_CFN_NAMES[@]} -eq ${#PARAM_VALUES[@]} ]] \
@@ -3550,7 +3584,13 @@ main() {
   prepare_repo
   echo ""
 
-  build_and_upload_edge_lambda
+  if [[ "${WEBUI_AUTH_ENABLED:-false}" == "true" && "$PACK_NAME" == "kirocrew" ]]; then
+    build_and_upload_edge_lambda
+    deploy_edge_stack
+    # Edge outputs are required by the main stack parameters; refresh the
+    # parallel parameter values after the companion stack completes.
+    build_deploy_params
+  fi
 
   case "$DEPLOY_METHOD" in
     "$DEPLOY_CFN_CLI") info "Deploying with CloudFormation..."
@@ -3591,6 +3631,10 @@ main() {
           "  Pool:      ${pool_id}" \
           "  Client:    ${client_id}" \
           "  Domain:    ${domain}" \
+          "" \
+          "  Edge Lambda: ${EDGE_LAMBDA_VERSION_ARN}" \
+          "  Edge Region: us-east-1" \
+          "  Edge Stack:  ${ENV_NAME}-edge-stack" \
           "" \
           "  Secret:    ${secret_arn}" || true
         echo ""

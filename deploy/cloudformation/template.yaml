@@ -1986,10 +1986,10 @@ Outputs:
   WebUIEdgeFunctionArn:
     Condition: EnableWebUI
     Description: Lambda@Edge function version ARN attached to the CloudFront distribution (viewer-request)
-    Value: !Ref WebUIEdgeLambdaVersion
+    Value: !Ref EdgeLambdaVersionArn
 
   WebUIEdgeSigningKeySecretArn:
     Condition: EnableWebUI
     Description: ARN of Secrets Manager secret holding the Lambda@Edge nonce/state signing key
-    Value: !Ref WebUIEdgeSigningKeySecret
+    Value: !Ref SigningKeySecretArn
 
