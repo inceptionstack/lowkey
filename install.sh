@@ -3478,22 +3478,24 @@ main() {
   _telem_deploy_completed 2>/dev/null || true
 
   # Post-deploy: read Cognito outputs from the stack and display admin credentials
+  # Wrapped in `|| true` and explicit guards so a transient AWS/jq failure here
+  # doesn't abort the installer between stack success and show_complete.
   if [[ "${WEBUI_AUTH_ENABLED:-false}" == "true" ]]; then
-    local stack_outputs pool_id client_id domain admin_email admin_password secret_arn dashboard_url
-    stack_outputs=$(aws cloudformation describe-stacks --stack-name "${ENV_NAME}" \
-      --region "$DEPLOY_REGION" --output json 2>/dev/null | jq -r '.Stacks[0].Outputs')
-    if [[ -n "$stack_outputs" && "$stack_outputs" != "null" ]]; then
-      pool_id=$(echo "$stack_outputs" | jq -r '.[] | select(.OutputKey=="WebUICognitoPoolId") | .OutputValue')
-      client_id=$(echo "$stack_outputs" | jq -r '.[] | select(.OutputKey=="WebUICognitoClientId") | .OutputValue')
-      domain=$(echo "$stack_outputs" | jq -r '.[] | select(.OutputKey=="WebUICognitoDomain") | .OutputValue')
-      admin_email=$(echo "$stack_outputs" | jq -r '.[] | select(.OutputKey=="WebUIAdminEmailOutput") | .OutputValue')
-      secret_arn=$(echo "$stack_outputs" | jq -r '.[] | select(.OutputKey=="WebUIAdminSecretArn") | .OutputValue')
-      dashboard_url=$(echo "$stack_outputs" | jq -r '.[] | select(.OutputKey=="KiroCrewDashboardUrl") | .OutputValue')
-      admin_password=""
+    local stack_outputs="" pool_id="" client_id="" domain="" admin_email="" admin_password="" secret_arn="" dashboard_url=""
+    stack_outputs=$(aws cloudformation describe-stacks --stack-name "${STACK_NAME}" \
+      --region "$DEPLOY_REGION" --output json 2>/dev/null || echo '{}')
+    stack_outputs=$(printf '%s' "$stack_outputs" | jq -r '.Stacks[0].Outputs // []' 2>/dev/null || echo '[]')
+    if [[ -n "$stack_outputs" && "$stack_outputs" != "null" && "$stack_outputs" != "[]" ]]; then
+      pool_id=$(printf '%s' "$stack_outputs" | jq -r '.[] | select(.OutputKey=="WebUICognitoPoolId") | .OutputValue' 2>/dev/null || true)
+      client_id=$(printf '%s' "$stack_outputs" | jq -r '.[] | select(.OutputKey=="WebUICognitoClientId") | .OutputValue' 2>/dev/null || true)
+      domain=$(printf '%s' "$stack_outputs" | jq -r '.[] | select(.OutputKey=="WebUICognitoDomain") | .OutputValue' 2>/dev/null || true)
+      admin_email=$(printf '%s' "$stack_outputs" | jq -r '.[] | select(.OutputKey=="WebUIAdminEmailOutput") | .OutputValue' 2>/dev/null || true)
+      secret_arn=$(printf '%s' "$stack_outputs" | jq -r '.[] | select(.OutputKey=="WebUIAdminSecretArn") | .OutputValue' 2>/dev/null || true)
+      dashboard_url=$(printf '%s' "$stack_outputs" | jq -r '.[] | select(.OutputKey=="KiroCrewDashboardUrl") | .OutputValue' 2>/dev/null || true)
       if [[ -n "$secret_arn" && "$secret_arn" != "null" ]]; then
         admin_password=$(aws secretsmanager get-secret-value --secret-id "$secret_arn" \
           --region "$DEPLOY_REGION" --query SecretString --output text 2>/dev/null \
-          | jq -r '.password // empty')
+          | jq -r '.password // empty' 2>/dev/null || true)
       fi
       if [[ -n "$admin_email" && "$admin_email" != "null" ]]; then
         echo ""
@@ -3508,7 +3510,7 @@ main() {
           "  Client:    ${client_id}" \
           "  Domain:    ${domain}" \
           "" \
-          "  Secret:    ${secret_arn}"
+          "  Secret:    ${secret_arn}" || true
         echo ""
       fi
     fi
