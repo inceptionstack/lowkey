@@ -1916,12 +1916,24 @@ choose_pack() {
     for i in "${!PACK_NAMES[@]}"; do
       if [[ "${PACK_NAMES[$i]}" == "$PACK_NAME" ]]; then
         found_auto=true
+        if [[ "${PACK_EXPERIMENTAL[$i]}" == "true" ]]; then
+          warn "${PACK_NAME} is experimental — expect rough edges"
+        fi
         break
       fi
     done
     if [[ "$found_auto" != true ]]; then
-      PACK_NAME="openclaw"
-      warn "kirocrew not found in registry — falling back to openclaw"
+      # Validate fallback exists too
+      local fallback_found=false
+      for i in "${!PACK_NAMES[@]}"; do
+        [[ "${PACK_NAMES[$i]}" == "openclaw" ]] && fallback_found=true && break
+      done
+      if [[ "$fallback_found" == true ]]; then
+        PACK_NAME="openclaw"
+        warn "kirocrew not found in registry — falling back to openclaw"
+      else
+        fail "Neither kirocrew nor openclaw found in registry. Check packs/registry.json."
+      fi
     fi
     ok "Agent: ${PACK_NAME} (auto-selected)"
     return
@@ -1930,7 +1942,7 @@ choose_pack() {
   # Interactive: build display items for gum choose
   local -a gum_items=()
   local default_item=""
-  local pname="" item="" in_list=false sp=""
+  local pname="" item="" in_list=false sp="" wp=""
 
   # Simple mode: curated list (order preserved) with UI-type hints
   local -a simple_packs=(kirocrew openclaw hermes claude-code codex-cli kiro-cli troika)
@@ -1974,6 +1986,11 @@ choose_pack() {
   # Fallback: if intended default wasn't found, use first item
   if [[ -z "$default_item" && ${#gum_items[@]} -gt 0 ]]; then
     default_item="${gum_items[0]}"
+  fi
+
+  # Guard: if no packs matched, fail clearly
+  if [[ ${#gum_items[@]} -eq 0 ]]; then
+    fail "No supported packs found for ${INSTALL_MODE} mode. Check packs/registry.json."
   fi
   local pack_choice
   local header="${1:-Agent to deploy}"
