@@ -2119,136 +2119,48 @@ collect_config_simple() {
   fi
 }
 
-# Configure Cognito Managed Login for a pack WebUI.  The pack remains responsible
-# for validating tokens and enforcing authentication on every route.
+# Collect WebUI auth preferences for a pack. Cognito resources are created
+# by the CloudFormation stack (WebUIUserPool + custom resource); this
+# function only gathers user input and sets vars for build_deploy_params.
 configure_webui_auth() {
   local pack_name="$1" webui_port="$2" callback_path="$3"
-  local pool_id="${WEBUI_POOL_ID:-}" client_id="" domain_prefix="" user_email="${WEBUI_EMAIL:-}"
-  local callback_url="http://localhost:${webui_port}${callback_path}"
-  local logout_url="http://localhost:${webui_port}/"
-  local pool_name choice pools pool_count suffix domain_json
+  local user_email="${WEBUI_EMAIL:-}"
 
   export WEBUI_AUTH_ENABLED="false"
-  [[ "${WEBUI_NO_AUTH:-false}" == true ]] && { warn "WebUI authentication disabled (--webui-no-auth); use SSM/VPN-only access."; return 0; }
+  export WEBUI_ADMIN_EMAIL=""
 
-  if [[ "${AUTO_YES:-false}" != true ]] && ! confirm "Protect ${pack_name} WebUI with Cognito login?" "default_yes"; then
+  if [[ "${WEBUI_NO_AUTH:-false}" == true ]]; then
+    warn "WebUI authentication disabled (--webui-no-auth); use SSM/VPN-only access."
+    return 0
+  fi
+
+  if [[ "${AUTO_YES:-false}" != true ]] && ! confirm "Protect ${pack_name} WebUI with Cognito login? (enterprise-grade)" "default_yes"; then
     warn "WebUI authentication disabled; use SSM/VPN-only access."
     return 0
   fi
+
   if [[ "${AUTO_YES:-false}" == true && -z "$user_email" ]]; then
-    # TODO(unattended): In a future version, --webui-email will be supported for
-    # fully unattended KiroCrew installs. For now, skip auth in non-interactive mode.
+    # TODO(unattended): --webui-email plumbing for fully unattended installs.
     warn "Non-interactive mode without --webui-email; skipping WebUI auth."
     warn "Use SSM port-forward or VPN-only access."
     return 0
   fi
 
-  if [[ -z "$pool_id" ]]; then
-    pools=$(aws cognito-idp list-user-pools --max-results 20 --region "$DEPLOY_REGION" --output json 2>/dev/null) \
-      || fail "Unable to list Cognito user pools in ${DEPLOY_REGION}; verify AWS permissions."
-    pool_count=$(echo "$pools" | jq '.UserPools | length')
-    if [[ "$pool_count" -gt 0 && "${AUTO_YES:-false}" != true ]]; then
-      local -a pool_items=() pool_ids=() item
-      while IFS=$'\t' read -r pool_ids_item pool_name_item; do
-        pool_items+=("Use existing pool: ${pool_name_item} (${pool_ids_item})")
-        pool_ids+=("${pool_ids_item}")
-      done < <(echo "$pools" | jq -r '.UserPools[] | [.Id,.Name] | @tsv')
-      pool_items+=("Create new pool (recommended)")
-      _gum_or_die choice "$GUM" choose --header "Cognito user pool" "${pool_items[@]}" \
-        || fail "Cognito user pool selection is required"
-      if [[ "$choice" == "Create new pool (recommended)" ]]; then
-        pool_id=""
-      else
-        pool_id="${choice##* (}"; pool_id="${pool_id%)}"
-      fi
-    fi
-  fi
-
-  if [[ -z "$pool_id" ]]; then
-    pool_name="lowkey-${pack_name}-${ENV_NAME}"
-    local pool_json
-    pool_json=$(aws cognito-idp create-user-pool --pool-name "$pool_name" \
-      --policies '{"PasswordPolicy":{"MinimumLength":12,"RequireUppercase":true,"RequireLowercase":true,"RequireNumbers":true,"RequireSymbols":true,"TemporaryPasswordValidityDays":1}}' \
-      --admin-create-user-config '{"AllowAdminCreateUserOnly":true}' \
-      --auto-verified-attributes email --username-attributes email \
-      --schema '[{"Name":"email","Required":true,"Mutable":true}]' \
-      --user-pool-tags "{\"loki:managed\":\"true\",\"loki:pack\":\"${pack_name}\",\"loki:env\":\"${ENV_NAME}\"}" \
-      --region "$DEPLOY_REGION" --output json 2>/dev/null) \
-      || fail "Cognito user pool creation failed; verify cognito-idp permissions."
-    pool_id=$(echo "$pool_json" | jq -r '.UserPool.Id')
-    [[ -z "$pool_id" || "$pool_id" == "null" ]] && fail "Cognito pool created but returned no pool ID."
-  else
-    local pool_cfg allow_admin
-    pool_cfg=$(aws cognito-idp describe-user-pool --user-pool-id "$pool_id" --region "$DEPLOY_REGION" --output json 2>/dev/null) \
-      || fail "Unable to describe Cognito pool ${pool_id}; verify the pool ID and region."
-    allow_admin=$(echo "$pool_cfg" | jq -r '.UserPool.AdminCreateUserConfig.AllowAdminCreateUserOnly | if . == false then "false" elif . == null then "true" else tostring end')
-    [[ "$allow_admin" != "true" ]] && fail "Existing pool ${pool_id} permits self-signup; choose a pool with admin-only user creation."
-  fi
-
-  local client_json
-  client_json=$(aws cognito-idp create-user-pool-client --user-pool-id "$pool_id" \
-    --client-name "${pack_name}-webui" --no-generate-secret \
-    --explicit-auth-flows ALLOW_USER_SRP_AUTH ALLOW_REFRESH_TOKEN_AUTH \
-    --supported-identity-providers COGNITO \
-    --allowed-o-auth-flows code --allowed-o-auth-flows-user-pool-client \
-    --allowed-o-auth-scopes openid email --callback-urls "[\"${callback_url}\"]" \
-    --logout-urls "[\"${logout_url}\"]" --prevent-user-existence-errors ENABLED \
-    --token-validity-units '{"AccessToken":"hours","IdToken":"hours","RefreshToken":"days"}' \
-    --access-token-validity 1 --id-token-validity 1 --refresh-token-validity 30 \
-    --region "$DEPLOY_REGION" --output json 2>/dev/null) \
-    || fail "Cognito app client creation failed for pool ${pool_id}."
-  client_id=$(echo "$client_json" | jq -r '.UserPoolClient.ClientId')
-  [[ -z "$client_id" || "$client_id" == null ]] && fail "Cognito returned no app client ID."
-
-  # Check if pool already has a domain (existing pools); reuse if so
-  local existing_domain
-  existing_domain=$(aws cognito-idp describe-user-pool --user-pool-id "$pool_id" \
-    --region "$DEPLOY_REGION" --output json 2>/dev/null | jq -r '.UserPool.Domain // empty')
-  if [[ -n "$existing_domain" ]]; then
-    domain_prefix="$existing_domain"
-  else
-    suffix=$(python3 -c 'import secrets; print(secrets.token_hex(3))')
-    domain_prefix="lowkey-${pack_name}-${suffix}"
-    aws cognito-idp create-user-pool-domain --user-pool-id "$pool_id" \
-      --domain "$domain_prefix" --region "$DEPLOY_REGION" --output json >/dev/null 2>&1 \
-      || { suffix=$(python3 -c 'import secrets; print(secrets.token_hex(4))'); domain_prefix="lowkey-${pack_name}-${suffix}"; \
-        aws cognito-idp create-user-pool-domain --user-pool-id "$pool_id" --domain "$domain_prefix" --region "$DEPLOY_REGION" --output json >/dev/null 2>&1 \
-        || fail "Cognito hosted UI domain creation failed (including retry)."; }
-  fi
-
   if [[ -z "$user_email" ]]; then
     while true; do
-      prompt "Email for WebUI login" user_email ""
+      prompt "Email for WebUI admin login" user_email ""
       [[ "$user_email" =~ ^[^@]+@[^@]+\.[^@]+$ ]] && break
       warn "Please enter a valid email address."
     done
   elif [[ ! "$user_email" =~ ^[^@]+@[^@]+\.[^@]+$ ]]; then
     fail "Invalid --webui-email value: ${user_email}"
   fi
-  local password
-  password=$(python3 -c 'import secrets,string; u=secrets.choice(string.ascii_uppercase); l=secrets.choice(string.ascii_lowercase); d=secrets.choice(string.digits); s=secrets.choice("!@#$%&*"); r=[secrets.choice(string.ascii_letters+string.digits+"!@#$%&*") for _ in range(12)]; a=[u,l,d,s]+r; secrets.SystemRandom().shuffle(a); print("".join(a))')
-  aws cognito-idp admin-create-user --user-pool-id "$pool_id" --username "$user_email" \
-    --user-attributes "Name=email,Value=${user_email}" "Name=email_verified,Value=true" \
-    --message-action SUPPRESS --region "$DEPLOY_REGION" --output json >/dev/null 2>&1 \
-    || fail "Cognito user creation failed for ${user_email}; the email may already exist."
-  aws cognito-idp admin-set-user-password --user-pool-id "$pool_id" --username "$user_email" \
-    --password "$password" --permanent --region "$DEPLOY_REGION" --output json >/dev/null 2>&1 \
-    || fail "Cognito permanent password setup failed for ${user_email}."
 
-  export WEBUI_AUTH_ENABLED="true" WEBUI_COGNITO_POOL_ID="$pool_id" WEBUI_COGNITO_CLIENT_ID="$client_id"
-  export WEBUI_COGNITO_DOMAIN="${domain_prefix}.auth.${DEPLOY_REGION}.amazoncognito.com"
-  export WEBUI_COGNITO_REGION="$DEPLOY_REGION" WEBUI_CALLBACK_URL="$callback_url" WEBUI_LOGOUT_URL="$logout_url"
-  ok "WebUI protected with Cognito"
-  echo ""
-  $GUM style --border rounded --border-foreground 220 --padding "1 2" --margin "0 2" \
-    "⚠  SAVE THESE CREDENTIALS — shown only once" \
-    "" \
-    "  Login:    ${user_email}" \
-    "  Password: ${password}" \
-    "" \
-    "  Pool:     ${pool_id}" \
-    "  Region:   ${DEPLOY_REGION}"
-  echo ""
+  export WEBUI_AUTH_ENABLED="true"
+  export WEBUI_ADMIN_EMAIL="$user_email"
+  ok "WebUI auth enabled — Cognito will be provisioned by CloudFormation"
+  info "Admin email: ${user_email}"
+  info "Initial password will be shown after stack deploys."
 }
 
 collect_config() {
@@ -2384,7 +2296,7 @@ collect_security_config() {
 # Parameter source-of-truth: single mapping for CFN Console and CFN CLI
 # ============================================================================
 # ⚠ KEEP THESE TWO ARRAYS IN SYNC — same order, same count
-PARAM_CFN_NAMES=(EnvironmentName PackName ProfileName InstanceType DefaultModel ModelMode BedrockRegion LokiWatermark EnableBedrockForm EnableSecurityHub EnableGuardDuty EnableInspector EnableAccessAnalyzer EnableConfigRecorder ExistingVpcId ExistingSubnetId ExistingSubnetId2 RepoBranch KiroFromSecret TelegramBotTokenSecret TelegramUser Primary DailyDriver CodexModel)
+PARAM_CFN_NAMES=(EnvironmentName PackName ProfileName InstanceType DefaultModel ModelMode BedrockRegion LokiWatermark EnableBedrockForm EnableSecurityHub EnableGuardDuty EnableInspector EnableAccessAnalyzer EnableConfigRecorder ExistingVpcId ExistingSubnetId ExistingSubnetId2 RepoBranch KiroFromSecret TelegramBotTokenSecret TelegramUser Primary DailyDriver CodexModel EnableWebUIAuth WebUIAdminEmail)
 PARAM_VALUES=()  # populated by build_deploy_params()
 
 # Per-pack default model (passed to CFN DefaultModel / bootstrap.sh --model).
@@ -2444,6 +2356,8 @@ build_deploy_params() {
     "${TROIKA_PRIMARY:-openclaw}"
     "${TROIKA_DAILY_DRIVER:-}"
     "${TROIKA_CODEX_MODEL:-openai.gpt-5.5}"
+    "${WEBUI_AUTH_ENABLED:-false}"
+    "${WEBUI_ADMIN_EMAIL:-}"
   )
   # Validate parallel arrays are in sync
   [[ ${#PARAM_CFN_NAMES[@]} -eq ${#PARAM_VALUES[@]} ]] \
@@ -3452,16 +3366,9 @@ run_config_and_review() {
     return
   }
 
-  # Write WebUI auth config to SSM after user confirms deployment
-  if [[ "${WEBUI_AUTH_ENABLED:-false}" == "true" ]]; then
-    local ssm_prefix="/lowkey/${ENV_NAME}/webui"
-    aws ssm put-parameter --name "${ssm_prefix}/pool-id" --value "$WEBUI_COGNITO_POOL_ID" --type String --overwrite --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
-    aws ssm put-parameter --name "${ssm_prefix}/client-id" --value "$WEBUI_COGNITO_CLIENT_ID" --type String --overwrite --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
-    aws ssm put-parameter --name "${ssm_prefix}/domain" --value "$WEBUI_COGNITO_DOMAIN" --type String --overwrite --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
-    aws ssm put-parameter --name "${ssm_prefix}/region" --value "$WEBUI_COGNITO_REGION" --type String --overwrite --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
-    aws ssm put-parameter --name "${ssm_prefix}/callback-url" --value "$WEBUI_CALLBACK_URL" --type String --overwrite --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
-    ok "WebUI auth config written to SSM (${ssm_prefix}/*)"
-  fi
+  # Cognito is provisioned by CloudFormation — no SSM writes needed here.
+  # Stack outputs (pool ID, client ID, domain, admin credentials) are
+  # displayed to the user after deploy completes.
 }
 
 main() {
@@ -3556,12 +3463,9 @@ main() {
     _telem_deploy_started 2>/dev/null || true
     step "Deploy (Console)"
     deploy_console
-    # TODO(post-deploy): Console deploy exits here; user deploys stack manually.
-    # Once deployed, they must update Cognito callback URLs with the CloudFront URL.
-    # Future: add a post-deploy verify command that does this automatically.
     if [[ "${WEBUI_AUTH_ENABLED:-false}" == "true" ]]; then
-      info "After deploying the stack, update Cognito callback URL with your CloudFront domain."
-      info "Run: aws cognito-idp update-user-pool-client --user-pool-id ${WEBUI_COGNITO_POOL_ID} --client-id ${WEBUI_COGNITO_CLIENT_ID} --callback-urls '[\"https://<your-cf-domain>/auth/callback\",\"http://localhost:5476/auth/callback\"]' --region ${DEPLOY_REGION}"
+      info "After deploying the stack, retrieve the initial admin password from stack outputs:"
+      info "  aws cloudformation describe-stacks --stack-name <name> --region ${DEPLOY_REGION} --query 'Stacks[0].Outputs' --output table"
     fi
     _telem_install_completed 2>/dev/null || true
     exit 0
@@ -3581,28 +3485,32 @@ main() {
   esac
   _telem_deploy_completed 2>/dev/null || true
 
-  # Post-deploy: update Cognito callback URLs with the CloudFront/ALB URL
-  if [[ "${WEBUI_AUTH_ENABLED:-false}" == "true" && -n "${WEBUI_COGNITO_CLIENT_ID:-}" ]]; then
-    local cf_url=""
-    cf_url=$(aws cloudformation describe-stacks --stack-name "${ENV_NAME}" \
-      --region "$DEPLOY_REGION" --output json 2>/dev/null \
-      | jq -r '.Stacks[0].Outputs[] | select(.OutputKey=="CloudFrontURL" or .OutputKey=="DashboardURL" or .OutputKey=="WebUIURL" or .OutputKey=="KiroCrewDashboardUrl") | .OutputValue' \
-      | head -1)
-    if [[ -n "$cf_url" && "$cf_url" != "null" ]]; then
-      # Normalize: strip trailing slash, add callback path
-      cf_url="${cf_url%/}"
-      local remote_callback="${cf_url}/auth/callback"
-      local remote_logout="${cf_url}/"
-      aws cognito-idp update-user-pool-client --user-pool-id "$WEBUI_COGNITO_POOL_ID" \
-        --client-id "$WEBUI_COGNITO_CLIENT_ID" \
-        --callback-urls "[\"${WEBUI_CALLBACK_URL}\",\"${remote_callback}\"]" \
-        --logout-urls "[\"${WEBUI_LOGOUT_URL}\",\"${remote_logout}\"]" \
-        --region "$DEPLOY_REGION" --output json >/dev/null 2>&1 \
-        && ok "Cognito callback URLs updated with ${cf_url}" \
-        || warn "Could not update Cognito callback URLs with CloudFront URL; update manually if needed."
-      # Also update SSM
-      local ssm_prefix="/lowkey/${ENV_NAME}/webui"
-      aws ssm put-parameter --name "${ssm_prefix}/callback-url" --value "${remote_callback}" --type String --overwrite --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
+  # Post-deploy: read Cognito outputs from the stack and display admin credentials
+  if [[ "${WEBUI_AUTH_ENABLED:-false}" == "true" ]]; then
+    local stack_outputs pool_id client_id domain admin_email admin_password dashboard_url
+    stack_outputs=$(aws cloudformation describe-stacks --stack-name "${ENV_NAME}" \
+      --region "$DEPLOY_REGION" --output json 2>/dev/null | jq -r '.Stacks[0].Outputs')
+    if [[ -n "$stack_outputs" && "$stack_outputs" != "null" ]]; then
+      pool_id=$(echo "$stack_outputs" | jq -r '.[] | select(.OutputKey=="WebUICognitoPoolId") | .OutputValue')
+      client_id=$(echo "$stack_outputs" | jq -r '.[] | select(.OutputKey=="WebUICognitoClientId") | .OutputValue')
+      domain=$(echo "$stack_outputs" | jq -r '.[] | select(.OutputKey=="WebUICognitoDomain") | .OutputValue')
+      admin_email=$(echo "$stack_outputs" | jq -r '.[] | select(.OutputKey=="WebUIAdminEmailOutput") | .OutputValue')
+      admin_password=$(echo "$stack_outputs" | jq -r '.[] | select(.OutputKey=="WebUIAdminPassword") | .OutputValue')
+      dashboard_url=$(echo "$stack_outputs" | jq -r '.[] | select(.OutputKey=="KiroCrewDashboardUrl") | .OutputValue')
+      if [[ -n "$admin_email" && "$admin_email" != "null" ]]; then
+        echo ""
+        $GUM style --border rounded --border-foreground 220 --padding "1 2" --margin "0 2" \
+          "⚠  SAVE THESE CREDENTIALS — shown only once" \
+          "" \
+          "  Dashboard: ${dashboard_url}" \
+          "  Login:     ${admin_email}" \
+          "  Password:  ${admin_password}" \
+          "" \
+          "  Pool:      ${pool_id}" \
+          "  Client:    ${client_id}" \
+          "  Domain:    ${domain}"
+        echo ""
+      fi
     fi
   fi
 
