@@ -2210,8 +2210,17 @@ build_and_upload_edge_lambda() {
   aws s3 cp "$zip_path" "s3://${bucket}/${key}" --region "$DEPLOY_REGION" >/dev/null \
     || fail "Failed to upload edge Lambda zip"
 
+  # Compute base64-encoded SHA256 of the zip. CFN needs this on the
+  # AWS::Lambda::Version resource so a new version is published whenever
+  # the code changes; without it, CloudFront keeps pointing at the old
+  # version even though $LATEST has new code.
+  local code_sha256
+  code_sha256=$(openssl dgst -sha256 -binary "$zip_path" | openssl base64 -A) \
+    || fail "Failed to compute SHA256 of edge Lambda zip"
+
   export EDGE_LAMBDA_S3_BUCKET="$bucket"
   export EDGE_LAMBDA_S3_KEY="$key"
+  export EDGE_LAMBDA_CODE_SHA256="$code_sha256"
   ok "Edge Lambda uploaded"
 }
 
@@ -2349,7 +2358,7 @@ collect_security_config() {
 # Parameter source-of-truth: single mapping for CFN Console and CFN CLI
 # ============================================================================
 # ⚠ KEEP THESE TWO ARRAYS IN SYNC — same order, same count
-PARAM_CFN_NAMES=(EnvironmentName PackName ProfileName InstanceType DefaultModel ModelMode BedrockRegion LokiWatermark EnableBedrockForm EnableSecurityHub EnableGuardDuty EnableInspector EnableAccessAnalyzer EnableConfigRecorder ExistingVpcId ExistingSubnetId ExistingSubnetId2 RepoBranch KiroFromSecret TelegramBotTokenSecret TelegramUser Primary DailyDriver CodexModel EnableWebUIAuth WebUIAdminEmail EdgeLambdaS3Bucket EdgeLambdaS3Key)
+PARAM_CFN_NAMES=(EnvironmentName PackName ProfileName InstanceType DefaultModel ModelMode BedrockRegion LokiWatermark EnableBedrockForm EnableSecurityHub EnableGuardDuty EnableInspector EnableAccessAnalyzer EnableConfigRecorder ExistingVpcId ExistingSubnetId ExistingSubnetId2 RepoBranch KiroFromSecret TelegramBotTokenSecret TelegramUser Primary DailyDriver CodexModel EnableWebUIAuth WebUIAdminEmail EdgeLambdaS3Bucket EdgeLambdaS3Key EdgeLambdaCodeSha256)
 PARAM_VALUES=()  # populated by build_deploy_params()
 
 # Per-pack default model (passed to CFN DefaultModel / bootstrap.sh --model).
@@ -2413,6 +2422,7 @@ build_deploy_params() {
     "${WEBUI_ADMIN_EMAIL:-}"
     "${EDGE_LAMBDA_S3_BUCKET:-}"
     "${EDGE_LAMBDA_S3_KEY:-}"
+    "${EDGE_LAMBDA_CODE_SHA256:-}"
   )
   # Validate parallel arrays are in sync
   [[ ${#PARAM_CFN_NAMES[@]} -eq ${#PARAM_VALUES[@]} ]] \

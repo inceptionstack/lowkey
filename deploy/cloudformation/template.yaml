@@ -382,6 +382,11 @@ Parameters:
     Default: ''
     Description: "S3 key of the Lambda@Edge deployment zip. Required when EnableWebUIAuth is true. Installer uploads and sets this."
 
+  EdgeLambdaCodeSha256:
+    Type: String
+    Default: ''
+    Description: "Base64-encoded SHA256 of the Lambda@Edge zip. Required when EnableWebUIAuth is true. Forces a new AWS::Lambda::Version to be published (and picked up by CloudFront) when the code changes."
+
 # ============================================================================
 # RULES
 # ============================================================================
@@ -421,6 +426,8 @@ Rules:
         AssertDescription: "EdgeLambdaS3Bucket is required when EnableWebUIAuth is true (installer uploads the Lambda@Edge zip and sets this)."
       - Assert: !Not [!Equals [!Ref EdgeLambdaS3Key, '']]
         AssertDescription: "EdgeLambdaS3Key is required when EnableWebUIAuth is true (installer uploads the Lambda@Edge zip and sets this)."
+      - Assert: !Not [!Equals [!Ref EdgeLambdaCodeSha256, '']]
+        AssertDescription: "EdgeLambdaCodeSha256 is required when EnableWebUIAuth is true (installer computes and sets this so AWS::Lambda::Version publishes new versions on code updates)."
 
 # ============================================================================
 # CONDITIONS
@@ -1793,14 +1800,14 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - PolicyName: FetchSigningKey
+        - PolicyName: FetchEdgeConfig
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
                   - secretsmanager:GetSecretValue
-                Resource: !Ref WebUIEdgeSigningKeySecret
+                Resource: !Ref WebUIEdgeConfigSecret
 
   WebUIEdgeLambdaFunction:
     Type: AWS::Lambda::Function
@@ -1820,13 +1827,16 @@ Resources:
         S3Key: !Ref EdgeLambdaS3Key
 
   # Version is required for LambdaFunctionAssociations; publishing a new version
-  # is how updates roll out to CloudFront edges.
+  # is how updates roll out to CloudFront edges. CodeSha256 makes the resource
+  # non-immutable across deploys: when the zip changes, the SHA changes, CFN
+  # sees a diff and publishes a new version (which CloudFront then picks up).
   WebUIEdgeLambdaVersion:
     Type: AWS::Lambda::Version
     Condition: EnableWebUI
     Properties:
       FunctionName: !Ref WebUIEdgeLambdaFunction
-      Description: !Sub 'KiroCrew WebUI Cognito auth (${EnvironmentName})'
+      Description: !Sub 'KiroCrew WebUI Cognito auth (${EnvironmentName}) sha256=${EdgeLambdaCodeSha256}'
+      CodeSha256: !Ref EdgeLambdaCodeSha256
 
   # SSM Session Manager Preferences (auto-login as ec2-user with welcome)
   # --------------------------------------------------------------------------
