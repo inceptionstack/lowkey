@@ -2104,7 +2104,6 @@ collect_config_simple() {
   local ts_suffix; ts_suffix=$(date +%s | tail -c 4)
   ENV_NAME="${PACK_NAME}-$((existing_count + 1))-${ts_suffix}"
   LOKI_WATERMARK="$ENV_NAME"
-  [[ "$PACK_NAME" == "kirocrew" ]] && WEBUI_AUTH_DEFERRED=true
   case "$PROFILE_NAME" in
     personal_assistant)
       SECURITY_HUB="false"; GUARDDUTY="false"; INSPECTOR="false"
@@ -2113,6 +2112,11 @@ collect_config_simple() {
       SECURITY_HUB="true"; GUARDDUTY="true"; INSPECTOR="true"
       ACCESS_ANALYZER="true"; CONFIG_RECORDER="true" ;;
   esac
+
+  # WebUI auth: ask during config wizard (before summary)
+  if [[ "$PACK_NAME" == "kirocrew" ]]; then
+    configure_webui_auth "$PACK_NAME" 5476 "/auth/callback"
+  fi
 }
 
 # Configure Cognito Managed Login for a pack WebUI.  The pack remains responsible
@@ -2271,7 +2275,6 @@ collect_config() {
 
   ENV_NAME="$default_env_name"
   LOKI_WATERMARK="$ENV_NAME"
-  [[ "$PACK_NAME" == "kirocrew" ]] && WEBUI_AUTH_DEFERRED=true
   ok "Environment: ${ENV_NAME}"
 
   # Adjust instance size default: profile takes precedence, pack registry as fallback
@@ -2325,6 +2328,11 @@ collect_config() {
   [[ -z "$INSTANCE_TYPE" ]] && INSTANCE_TYPE="$default_type"
 
   collect_security_config
+
+  # WebUI auth: ask during config wizard (before summary)
+  if [[ "$PACK_NAME" == "kirocrew" ]]; then
+    configure_webui_auth "$PACK_NAME" 5476 "/auth/callback"
+  fi
 }
 
 collect_security_config() {
@@ -3444,19 +3452,15 @@ run_config_and_review() {
     return
   }
 
-  # Deferred WebUI auth: create Cognito resources only after user confirms deployment
-  if [[ "${WEBUI_AUTH_DEFERRED:-false}" == true ]]; then
-    configure_webui_auth "$PACK_NAME" 5476 "/auth/callback"
-    # Write config to SSM so the instance can read it during bootstrap
-    if [[ "${WEBUI_AUTH_ENABLED:-false}" == "true" ]]; then
-      local ssm_prefix="/lowkey/${ENV_NAME}/webui"
-      aws ssm put-parameter --name "${ssm_prefix}/pool-id" --value "$WEBUI_COGNITO_POOL_ID" --type String --overwrite --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
-      aws ssm put-parameter --name "${ssm_prefix}/client-id" --value "$WEBUI_COGNITO_CLIENT_ID" --type String --overwrite --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
-      aws ssm put-parameter --name "${ssm_prefix}/domain" --value "$WEBUI_COGNITO_DOMAIN" --type String --overwrite --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
-      aws ssm put-parameter --name "${ssm_prefix}/region" --value "$WEBUI_COGNITO_REGION" --type String --overwrite --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
-      aws ssm put-parameter --name "${ssm_prefix}/callback-url" --value "$WEBUI_CALLBACK_URL" --type String --overwrite --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
-      ok "WebUI auth config written to SSM (${ssm_prefix}/*)"
-    fi
+  # Write WebUI auth config to SSM after user confirms deployment
+  if [[ "${WEBUI_AUTH_ENABLED:-false}" == "true" ]]; then
+    local ssm_prefix="/lowkey/${ENV_NAME}/webui"
+    aws ssm put-parameter --name "${ssm_prefix}/pool-id" --value "$WEBUI_COGNITO_POOL_ID" --type String --overwrite --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
+    aws ssm put-parameter --name "${ssm_prefix}/client-id" --value "$WEBUI_COGNITO_CLIENT_ID" --type String --overwrite --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
+    aws ssm put-parameter --name "${ssm_prefix}/domain" --value "$WEBUI_COGNITO_DOMAIN" --type String --overwrite --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
+    aws ssm put-parameter --name "${ssm_prefix}/region" --value "$WEBUI_COGNITO_REGION" --type String --overwrite --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
+    aws ssm put-parameter --name "${ssm_prefix}/callback-url" --value "$WEBUI_CALLBACK_URL" --type String --overwrite --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
+    ok "WebUI auth config written to SSM (${ssm_prefix}/*)"
   fi
 }
 
