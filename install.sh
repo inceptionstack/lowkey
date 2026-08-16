@@ -671,6 +671,9 @@ DEBUG_IN_REPO=false
 TEST_MODE=false
 AUTO_RENAME_ACCOUNT=false
 DISABLE_ACCOUNT_RENAME=false
+WEBUI_EMAIL=""
+WEBUI_NO_AUTH=false
+WEBUI_POOL_ID=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --non-interactive|--yes|-y) AUTO_YES=true; shift ;;
@@ -739,6 +742,19 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       TROIKA_CODEX_MODEL="$2"; shift 2 ;;
+    --webui-email)
+      if [[ $# -lt 2 || "$2" == --* ]]; then
+        echo -e "\033[0;31m✗\033[0m --webui-email requires an email address" >&2
+        exit 1
+      fi
+      WEBUI_EMAIL="$2"; shift 2 ;;
+    --webui-no-auth) WEBUI_NO_AUTH=true; shift ;;
+    --webui-pool-id)
+      if [[ $# -lt 2 || "$2" == --* ]]; then
+        echo -e "\033[0;31m✗\033[0m --webui-pool-id requires a Cognito user pool ID" >&2
+        exit 1
+      fi
+      WEBUI_POOL_ID="$2"; shift 2 ;;
     --debug-in-repo) DEBUG_IN_REPO=true; shift ;;
     --test|--dry-run) TEST_MODE=true; shift ;;
     --auto-rename-account-enabled) AUTO_RENAME_ACCOUNT=true; shift ;;
@@ -774,6 +790,9 @@ Options:
                                  (roundhouse pack, advanced/pre-created)
   --telegram-user <username>     Telegram username for bot pairing
                                  (roundhouse pack, without @)
+  --webui-email <email>          Email for the initial WebUI user
+  --webui-no-auth                Skip Cognito WebUI authentication setup
+  --webui-pool-id <id>           Use an existing Cognito user pool
   --debug-in-repo                Dev-only: run installer from cwd
   --test, --dry-run              Run installer end-to-end without
                                  provisioning AWS resources. Telemetry
@@ -2095,6 +2114,7 @@ collect_config_simple() {
   local ts_suffix; ts_suffix=$(date +%s | tail -c 4)
   ENV_NAME="${PACK_NAME}-$((existing_count + 1))-${ts_suffix}"
   LOKI_WATERMARK="$ENV_NAME"
+  [[ "$PACK_NAME" == "kirocrew" ]] && configure_webui_auth "$PACK_NAME" 5476 "/auth/callback"
 
   # Security: all on for builder/account_assistant, all off for personal_assistant
   case "$PROFILE_NAME" in
@@ -2105,6 +2125,115 @@ collect_config_simple() {
       SECURITY_HUB="true"; GUARDDUTY="true"; INSPECTOR="true"
       ACCESS_ANALYZER="true"; CONFIG_RECORDER="true" ;;
   esac
+}
+
+# Configure Cognito Managed Login for a pack WebUI.  The pack remains responsible
+# for validating tokens and enforcing authentication on every route.
+configure_webui_auth() {
+  local pack_name="$1" webui_port="$2" callback_path="$3"
+  local pool_id="${WEBUI_POOL_ID:-}" client_id="" domain_prefix="" user_email="${WEBUI_EMAIL:-}"
+  local callback_url="http://localhost:${webui_port}${callback_path}"
+  local logout_url="http://localhost:${webui_port}/"
+  local pool_name choice pools pool_count suffix domain_json
+
+  export WEBUI_AUTH_ENABLED="false"
+  [[ "${WEBUI_NO_AUTH:-false}" == true ]] && { warn "WebUI authentication disabled (--webui-no-auth); use SSM/VPN-only access."; return 0; }
+
+  if [[ "${AUTO_YES:-false}" != true ]] && ! confirm "Protect ${pack_name} WebUI with Cognito login?" "default_yes"; then
+    warn "WebUI authentication disabled; use SSM/VPN-only access."
+    return 0
+  fi
+  if [[ "${AUTO_YES:-false}" == true && ! -n "$user_email" ]]; then
+    fail "WebUI auth in non-interactive mode requires --webui-email <email>"
+  fi
+
+  if [[ -z "$pool_id" ]]; then
+    pools=$(aws cognito-idp list-user-pools --max-results 20 --region "$DEPLOY_REGION" --output json 2>/dev/null) \
+      || fail "Unable to list Cognito user pools in ${DEPLOY_REGION}; verify AWS permissions."
+    pool_count=$(echo "$pools" | jq '.UserPools | length')
+    if [[ "$pool_count" -gt 0 && "${AUTO_YES:-false}" != true ]]; then
+      local -a pool_items=() pool_ids=() item
+      while IFS=$'\t' read -r pool_ids_item pool_name_item; do
+        pool_items+=("Use existing pool: ${pool_name_item} (${pool_ids_item})")
+        pool_ids+=("${pool_ids_item}")
+      done < <(echo "$pools" | jq -r '.UserPools[] | [.Id,.Name] | @tsv')
+      pool_items+=("Create new pool (recommended)")
+      _gum_or_die choice "$GUM" choose --header "Cognito user pool" "${pool_items[@]}" \
+        || fail "Cognito user pool selection is required"
+      if [[ "$choice" == "Create new pool (recommended)" ]]; then
+        pool_id=""
+      else
+        pool_id="${choice##* (}"; pool_id="${pool_id%)}"
+      fi
+    fi
+  fi
+
+  if [[ -z "$pool_id" ]]; then
+    pool_name="lowkey-${pack_name}-${ENV_NAME}"
+    local pool_json
+    pool_json=$(aws cognito-idp create-user-pool --pool-name "$pool_name" \
+      --policies '{"PasswordPolicy":{"MinimumLength":12,"RequireUppercase":true,"RequireLowercase":true,"RequireNumbers":true,"RequireSymbols":true,"TemporaryPasswordValidityDays":1}}' \
+      --admin-create-user-config '{"AllowAdminCreateUserOnly":true}' \
+      --auto-verified-attributes email --username-attributes email \
+      --schema '[{"Name":"email","Required":true,"Mutable":true}]' \
+      --user-pool-tags "loki:managed=true,loki:pack=${pack_name},loki:env=${ENV_NAME}" \
+      --region "$DEPLOY_REGION" --output json 2>/dev/null) \
+      || fail "Cognito user pool creation failed; verify cognito-idp permissions."
+    pool_id=$(echo "$pool_json" | json_field Id)
+  else
+    local pool_cfg allow_admin
+    pool_cfg=$(aws cognito-idp describe-user-pool --user-pool-id "$pool_id" --region "$DEPLOY_REGION" --output json 2>/dev/null) \
+      || fail "Unable to describe Cognito pool ${pool_id}; verify the pool ID and region."
+    allow_admin=$(echo "$pool_cfg" | jq -r '.UserPool.AdminCreateUserConfig.AllowAdminCreateUserOnly // true')
+    [[ "$allow_admin" != true ]] && fail "Existing pool ${pool_id} permits self-signup; choose a pool with admin-only user creation."
+  fi
+
+  local client_json
+  client_json=$(aws cognito-idp create-user-pool-client --user-pool-id "$pool_id" \
+    --client-name "${pack_name}-webui" --no-generate-secret \
+    --explicit-auth-flows ALLOW_USER_SRP_AUTH ALLOW_REFRESH_TOKEN_AUTH \
+    --supported-identity-providers COGNITO --allowed-o-auth-flows code \
+    --allowed-o-auth-scopes openid email --callback-urls "[\"${callback_url}\"]" \
+    --logout-urls "[\"${logout_url}\"]" --prevent-user-existence-errors ENABLED \
+    --token-validity-units '{"AccessToken":"hours","IdToken":"hours","RefreshToken":"days"}' \
+    --access-token-validity 1 --id-token-validity 1 --refresh-token-validity 30 \
+    --region "$DEPLOY_REGION" --output json 2>/dev/null) \
+    || fail "Cognito app client creation failed for pool ${pool_id}."
+  client_id=$(echo "$client_json" | json_field ClientId)
+  [[ -z "$client_id" || "$client_id" == null ]] && fail "Cognito returned no app client ID."
+
+  suffix=$(python3 -c 'import secrets; print(secrets.token_hex(3))')
+  domain_prefix="lowkey-${pack_name}-${suffix}"
+  domain_json=$(aws cognito-idp create-user-pool-domain --user-pool-id "$pool_id" \
+    --domain "$domain_prefix" --region "$DEPLOY_REGION" --output json 2>/dev/null) \
+    || { suffix=$(python3 -c 'import secrets; print(secrets.token_hex(4))'); domain_prefix="lowkey-${pack_name}-${suffix}"; \
+      aws cognito-idp create-user-pool-domain --user-pool-id "$pool_id" --domain "$domain_prefix" --region "$DEPLOY_REGION" --output json >/dev/null 2>&1 \
+      || fail "Cognito hosted UI domain creation failed (including retry)."; }
+
+  if [[ -z "$user_email" ]]; then
+    while true; do
+      prompt "Email for WebUI login" user_email ""
+      [[ "$user_email" =~ ^[^@]+@[^@]+\.[^@]+$ ]] && break
+      warn "Please enter a valid email address."
+    done
+  elif [[ ! "$user_email" =~ ^[^@]+@[^@]+\.[^@]+$ ]]; then
+    fail "Invalid --webui-email value: ${user_email}"
+  fi
+  local password
+  password=$(python3 -c 'import secrets,string; print("".join(secrets.choice(string.ascii_letters+string.digits+"!@#$%&*") for _ in range(16)))')
+  aws cognito-idp admin-create-user --user-pool-id "$pool_id" --username "$user_email" \
+    --user-attributes "Name=email,Value=${user_email}" "Name=email_verified,Value=true" \
+    --message-action SUPPRESS --region "$DEPLOY_REGION" --output json >/dev/null 2>&1 \
+    || fail "Cognito user creation failed for ${user_email}; the email may already exist."
+  aws cognito-idp admin-set-user-password --user-pool-id "$pool_id" --username "$user_email" \
+    --password "$password" --permanent --region "$DEPLOY_REGION" --output json >/dev/null 2>&1 \
+    || fail "Cognito permanent password setup failed for ${user_email}."
+
+  export WEBUI_AUTH_ENABLED="true" WEBUI_COGNITO_POOL_ID="$pool_id" WEBUI_COGNITO_CLIENT_ID="$client_id"
+  export WEBUI_COGNITO_DOMAIN="${domain_prefix}.auth.${DEPLOY_REGION}.amazoncognito.com"
+  export WEBUI_COGNITO_REGION="$DEPLOY_REGION" WEBUI_CALLBACK_URL="$callback_url" WEBUI_LOGOUT_URL="$logout_url"
+  ok "WebUI protected with Cognito (login: ${user_email}, password: ${password})"
+  info "Save this password now; it will not be shown again."
 }
 
 collect_config() {
@@ -2131,6 +2260,7 @@ collect_config() {
 
   ENV_NAME="$default_env_name"
   LOKI_WATERMARK="$ENV_NAME"
+  [[ "$PACK_NAME" == "kirocrew" ]] && configure_webui_auth "$PACK_NAME" 5476 "/auth/callback"
   ok "Environment: ${ENV_NAME}"
 
   # Adjust instance size default: profile takes precedence, pack registry as fallback
