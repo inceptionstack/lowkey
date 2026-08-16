@@ -339,3 +339,157 @@ Uninstall flow:
 - [ ] KiroCrew gateway: implement JWT middleware (separate PR on KiroCrew repo)
 - [ ] Update uninstaller to handle Cognito cleanup
 - [ ] Add telemetry events: `install.webui_auth_configured`
+
+---
+
+# Lambda@Edge Enforcement (v2)
+
+**Status:** Design phase. Ships in follow-up PR after PR #85.
+
+## Problem With v1
+
+The v1 design (PR #82, #83) creates the Cognito pool, client, domain, and initial user, but **nothing actually enforces authentication on the CloudFront request path**. Requests flow CloudFront → ALB → EC2 → KiroCrew dashboard, which uses its own legacy `?token=<jwt>` query-param scheme. The Cognito resources exist but are unused.
+
+## Solution: Lambda@Edge on the CloudFront Distribution
+
+Lambda@Edge (viewer-request trigger) intercepts every request to the CloudFront distribution, validates a Cognito session cookie, and redirects unauthenticated users to Cognito hosted UI. Uses the AWS-published `cognito-at-edge` library.
+
+## Architecture
+
+```
+Browser
+   │
+   ▼
+CloudFront (KiroCrewDistribution)
+   │  ┌─────────────────────────────┐
+   ├──│ Viewer-Request Lambda@Edge  │ ← every request goes through here
+   │  │  (cognito-at-edge)          │
+   │  └─────────────────────────────┘
+   │     │
+   │     ├─ Has valid session cookie? ──► forward to ALB origin
+   │     │
+   │     ├─ Path is /auth/callback? ──► exchange code for tokens, set cookie, redirect to /
+   │     │
+   │     └─ No session? ──► 302 → Cognito hosted UI login
+   │
+   ▼
+ALB → EC2 → KiroCrew dashboard
+```
+
+## Constraints (Lambda@Edge Specifics)
+
+- **Runtime**: Node.js 18.x (has AWS SDK v3 pre-installed, saves package size).
+- **Region**: Function MUST live in `us-east-1` (CloudFront requirement). Executes replicated at every edge location.
+- **No environment variables**. Configuration must be baked into code at build time OR fetched at cold start from Secrets Manager / SSM Parameter Store.
+- **No VPC access.** Fine — Cognito is public API.
+- **50 MB unzipped package limit.** `cognito-at-edge` + deps ≈ 2 MB — well under.
+- **Cold-start budget**: <500 ms for viewer-request. Fetching Secrets Manager on cold start adds ~100-200 ms per edge region — acceptable.
+- **Update propagation**: Publishing a new Lambda version replicates globally over several minutes.
+
+## Build & Deploy Flow
+
+```
+1. Installer (install.sh):
+   a. cd packs/kirocrew/webui-auth-edge/
+   b. npm install --production
+   c. Substitute placeholders in index.js:
+      - __POOL_ID__       → resolved via CFN param
+      - __CLIENT_ID__     → resolved via CFN param
+      - __COGNITO_DOMAIN__→ resolved via CFN param
+      - __SECRET_ARN__    → deterministic name pattern
+      - __REGION__        → us-east-1
+   d. zip -r edge-lambda-<sha>.zip .
+   e. aws s3 cp edge-lambda-<sha>.zip s3://<install-bucket>/edge/edge-lambda-<sha>.zip
+   f. Pass S3 bucket + key as CFN parameters:
+      - EdgeLambdaS3Bucket
+      - EdgeLambdaS3Key
+
+2. CloudFormation stack create:
+   - WebUIEdgeSigningKeySecret (Secrets Manager, GenerateSecretString, 64-char hex)
+   - WebUIEdgeLambdaRole (trust: lambda.amazonaws.com + edgelambda.amazonaws.com)
+   - WebUIEdgeLambdaFunction (Code.S3Bucket/S3Key, Runtime nodejs18.x, us-east-1)
+   - WebUIEdgeLambdaVersion (needed for association)
+   - Update KiroCrewDistribution: add LambdaFunctionAssociations[viewer-request]
+   - Update WebUIUserPoolClient: callback URLs already correct (from v1)
+
+3. Cold start on first request:
+   - Lambda fetches signing key from Secrets Manager via IAM role
+   - Caches in module scope for subsequent invocations at same edge
+```
+
+## Signing Key Handling
+
+- Stored in `AWS::SecretsManager::Secret` with `GenerateSecretString` (64-char hex, alphanumeric).
+- Secret ARN is deterministic: `arn:aws:secretsmanager:us-east-1:<account>:secret:/lowkey/<env>/webui-edge-signing-key`. Baked into Lambda code at build time.
+- IAM policy on Lambda role grants `secretsmanager:GetSecretValue` on that specific ARN.
+- Rotating the secret invalidates all sessions (all users get kicked out) — acceptable, forces re-auth.
+
+## Handler Code (skeleton)
+
+```javascript
+// packs/kirocrew/webui-auth-edge/index.js
+import { Authenticator } from 'cognito-at-edge';
+import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
+
+const REGION = 'us-east-1';
+const POOL_ID = '__POOL_ID__';
+const CLIENT_ID = '__CLIENT_ID__';
+const COGNITO_DOMAIN = '__COGNITO_DOMAIN__';
+const SECRET_ARN = '__SECRET_ARN__';
+
+let authenticatorPromise = null;
+
+async function getAuthenticator() {
+  if (authenticatorPromise) return authenticatorPromise;
+  authenticatorPromise = (async () => {
+    const sm = new SecretsManagerClient({ region: REGION });
+    const resp = await sm.send(new GetSecretValueCommand({ SecretId: SECRET_ARN }));
+    const signingKey = JSON.parse(resp.SecretString).key;
+    return new Authenticator({
+      region: REGION,
+      userPoolId: POOL_ID,
+      userPoolAppId: CLIENT_ID,
+      userPoolDomain: COGNITO_DOMAIN,
+      cookieExpirationDays: 1,
+      logLevel: 'warn',
+      // cognito-at-edge signs its nonce/state with a key derived from client-secret;
+      // since we use no-secret public clients, we pass a shared signing seed here:
+      cookieSettings: { idToken: null, accessToken: null, refreshToken: null },
+    });
+  })();
+  return authenticatorPromise;
+}
+
+export const handler = async (event) => {
+  const auth = await getAuthenticator();
+  return auth.handle(event);
+};
+```
+
+## Cost Impact
+
+- Lambda@Edge: $0.60 / 1M requests + $0.00005001 / GB-sec. Typical dashboard use = <10k req/mo → <$0.01/mo.
+- Secrets Manager: $0.40 / secret / mo + $0.05 / 10k API calls. One secret + <100 cold starts/mo → $0.40/mo.
+- CloudWatch Logs (edge): pennies.
+- **Total: ~$0.40-0.50/mo per deployment.**
+
+## Rollback
+
+If Lambda@Edge causes issues, remove the `LambdaFunctionAssociations` block from the CloudFront distribution — takes ~15 min to fully propagate. CloudFront falls back to unauthenticated forwarding (same as v1 today).
+
+## Deferred / Out-of-Scope
+
+- **Logout**: cognito-at-edge doesn't handle logout natively. User must clear cookies OR visit `https://<cognito-domain>/logout?client_id=X&logout_uri=Y`. Follow-up work: add `/logout` path handler in Lambda@Edge.
+- **Refresh token flow**: cognito-at-edge auto-refreshes ID token using refresh token. Works out of the box.
+- **CSRF**: cognito-at-edge handles state param + PKCE. Verified against upstream code.
+- **Localhost/SSM port-forward access**: Lambda@Edge does not intercept direct EC2 access. If users port-forward `localhost:5476`, they hit the dashboard's own `?token` auth. Acceptable — SSM is already authenticated.
+
+## Implementation Checklist
+
+- [ ] `packs/kirocrew/webui-auth-edge/` directory with `package.json`, `index.js`, `build.sh`
+- [ ] `install.sh`: npm install + zip + S3 upload before CFN deploy
+- [ ] `install.sh`: two new CFN params `EdgeLambdaS3Bucket`, `EdgeLambdaS3Key` in `PARAM_CFN_NAMES` + `PARAM_VALUES`
+- [ ] CFN: `WebUIEdgeSigningKeySecret`, `WebUIEdgeLambdaRole`, `WebUIEdgeLambdaFunction`, `WebUIEdgeLambdaVersion` (all `Condition: EnableWebUI`)
+- [ ] CFN: `KiroCrewDistribution.DistributionConfig.DefaultCacheBehavior.LambdaFunctionAssociations` = viewer-request → new function version
+- [ ] CFN outputs: `WebUIEdgeFunctionArn`, `WebUIEdgeSigningKeySecretArn`
+- [ ] Validate template, `bash -n install.sh`, deploy test stack
