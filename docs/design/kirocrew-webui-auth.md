@@ -144,13 +144,11 @@ aws cognito-idp create-user-pool \
 aws cognito-idp create-user-pool-client \
   --user-pool-id "${POOL_ID}" \
   --client-name "${pack_name}-webui" \
-  --generate-secret  # ← NO: public client, no secret
   --no-generate-secret \
-  --explicit-auth-flows ALLOW_REFRESH_TOKEN_AUTH \
+  --explicit-auth-flows ALLOW_USER_SRP_AUTH ALLOW_REFRESH_TOKEN_AUTH \
   --supported-identity-providers COGNITO \
   --allowed-o-auth-flows code \
   --allowed-o-auth-scopes openid email \
-  --allowed-o-auth-flows-with-pkce true \
   --callback-urls "[\"${CALLBACK_URL}\"]" \
   --logout-urls "[\"${LOGOUT_URL}\"]" \
   --prevent-user-existence-errors ENABLED \
@@ -293,7 +291,7 @@ if not claims:
 | Email already exists in pool | `admin-create-user` fails → catch, offer to reset password |
 | Instance has public IP + no auth | Strong warning, require explicit `--webui-no-auth` |
 | `AUTO_YES` without `--webui-email` | Fail with clear message about required flag |
-| KiroCrew doesn't support Cognito yet | Set env vars anyway; pack ignores if unsupported (forward-compatible) |
+| KiroCrew doesn't support Cognito yet | Fail with clear error: "Pack does not support WebUI auth yet. Remove --webui-auth or wait for pack update." Never report "protected" without verified enforcement. |
 | Domain prefix collision | Append random suffix, retry once |
 
 ## Cognito Resource Cleanup
