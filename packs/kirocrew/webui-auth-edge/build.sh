@@ -35,8 +35,8 @@ if ! command -v "$NODE_BIN" >/dev/null 2>&1; then
 fi
 
 NODE_MAJOR=$("$NODE_BIN" -e 'console.log(process.versions.node.split(".")[0])')
-if [[ "$NODE_MAJOR" -lt 18 ]]; then
-  echo "build.sh: node 18+ required, got $NODE_MAJOR" >&2
+if [[ "$NODE_MAJOR" -lt 22 ]]; then
+  echo "build.sh: node 22+ required, got $NODE_MAJOR" >&2
   exit 5
 fi
 

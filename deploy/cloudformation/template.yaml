@@ -665,6 +665,25 @@ Resources:
       Port: 80
       Protocol: HTTP
       DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            ContentType: text/plain
+            MessageBody: Forbidden
+            StatusCode: '403'
+
+  KiroCrewOriginVerifyListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Condition: IsKiroCrew
+    Properties:
+      ListenerArn: !Ref KiroCrewHTTPListener
+      Priority: 1
+      Conditions:
+        - Field: http-header
+          HttpHeaderConfig:
+            HttpHeaderName: x-origin-verify
+            Values:
+              - !Sub '{{resolve:secretsmanager:${KiroCrewOriginVerifySecret}}}'
+      Actions:
         - Type: forward
           TargetGroupArn: !Ref KiroCrewTargetGroup
 
