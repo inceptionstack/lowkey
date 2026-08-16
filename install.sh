@@ -2165,6 +2165,12 @@ build_and_upload_edge_lambda() {
   [[ "${WEBUI_AUTH_ENABLED:-false}" == "true" ]] || return 0
   [[ "$PACK_NAME" == "kirocrew" ]] || return 0
 
+  # Preflight: required tools for the edge Lambda build path.
+  require_cmd node "node (18+) is required to build the Cognito Lambda@Edge zip. Install Node 18+ or disable WebUI auth."
+  require_cmd npm "npm is required to build the Cognito Lambda@Edge zip."
+  require_cmd zip "zip is required to package the Cognito Lambda@Edge deployment."
+  require_cmd openssl "openssl is required to compute the Lambda@Edge zip SHA256 for CFN."
+
   local build_script="${CLONE_DIR}/packs/kirocrew/webui-auth-edge/build.sh"
   # In debug-in-repo mode CLONE_DIR points into the working repo; otherwise it
   # points at the freshly-cloned copy. In either case the script must exist

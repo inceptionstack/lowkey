@@ -58,14 +58,38 @@ fi
 cd "$BUILD_DIR"
 npm install --production --no-audit --no-fund --loglevel=error >&2
 
-# Content-addressed zip name: hash the actual substituted source + package.json.
-# This ensures the S3 key CHANGES when the code changes, which forces CFN to
-# see a diff on Code.S3Key and publishes a new Lambda Version (fixes P1 #4).
-SHA=$(sha256sum "$BUILD_DIR/index.js" "$BUILD_DIR/package.json" | sha256sum | cut -c1-16)
-ZIP_NAME="edge-lambda-${SHA}.zip"
+# Content-addressed zip name: hash the actual ZIP BYTES (not source files) so
+# the S3 key stays in lockstep with CodeSha256 in CFN. Round-3 fix (P1 #2):
+# hashing source only meant node_modules variance produced different
+# CodeSha256 with same S3 key -> CFN Function unchanged but Version.CodeSha256
+# mismatch -> stack update fails.
+#
+# Portable SHA256: prefer openssl (universal on macOS + Linux); fall back to
+# sha256sum (Linux) then shasum (macOS builtin). Round-3 fix (P2 #2).
+sha256_hex() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 -hex "$1" | awk '{print $NF}'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    echo "build.sh: no sha256 tool available (need openssl, sha256sum, or shasum)" >&2
+    return 1
+  fi
+}
+
+# Build the zip first, then hash it. Use a stable temp name during build.
+TMP_ZIP="${OUT_DIR}/.edge-lambda-tmp-$$.zip"
+trap 'rm -f "$TMP_ZIP"; rm -rf "$BUILD_DIR"' EXIT
+rm -f "$TMP_ZIP"
+zip -r -q -X "$TMP_ZIP" index.js package.json node_modules >&2
+
+ZIP_SHA=$(sha256_hex "$TMP_ZIP") || exit 7
+SHA_SHORT="${ZIP_SHA:0:16}"
+ZIP_NAME="edge-lambda-${SHA_SHORT}.zip"
 ZIP_PATH="${OUT_DIR}/${ZIP_NAME}"
 
-rm -f "$ZIP_PATH"
-zip -r -q "$ZIP_PATH" index.js package.json node_modules >&2
+mv "$TMP_ZIP" "$ZIP_PATH"
 
 echo "$ZIP_PATH"

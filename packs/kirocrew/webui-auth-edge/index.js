@@ -54,8 +54,11 @@ async function getAuthenticator() {
       cookieExpirationDays: 1,
       disableCookieDomain: true,
       logLevel: 'warn',
-      cookieCompatibility: 'amplify',
-      nonceSigningSecret: cfg.signingKey,
+      // cognito-at-edge expects nonceSigningSecret nested under csrfProtection.
+      // Top-level 'nonceSigningSecret' is silently ignored (round-3 P1 #1 fix).
+      csrfProtection: {
+        nonceSigningSecret: cfg.signingKey,
+      },
     });
   })().catch((err) => {
     // Reset so the next cold-start attempt can retry
