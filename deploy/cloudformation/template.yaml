@@ -396,6 +396,12 @@ Rules:
       - Assert: !Not [!Equals [!Ref ExistingSubnetId2, !Ref ExistingSubnetId]]
         AssertDescription: "ExistingSubnetId2 must be different from ExistingSubnetId (different AZs)."
 
+  WebUIAdminEmailRequired:
+    RuleCondition: !Equals [!Ref EnableWebUIAuth, 'true']
+    Assertions:
+      - Assert: !Not [!Equals [!Ref WebUIAdminEmail, '']]
+        AssertDescription: "WebUIAdminEmail is required when EnableWebUIAuth is true."
+
 # ============================================================================
 # CONDITIONS
 # ============================================================================
@@ -1440,7 +1446,7 @@ Resources:
     Condition: EnableWebUI
     Properties:
       UserPoolId: !Ref WebUIUserPool
-      Domain: !Sub 'lowkey-${PackName}-${EnvironmentName}'
+      Domain: !Sub 'lowkey-${PackName}-${EnvironmentName}-${AWS::AccountId}'
 
   WebUIUserPoolClient:
     Type: AWS::Cognito::UserPoolClient
@@ -1476,6 +1482,21 @@ Resources:
         IdToken: hours
         RefreshToken: days
 
+  WebUIAdminSecret:
+    Type: AWS::SecretsManager::Secret
+    Condition: EnableWebUI
+    Properties:
+      Name: !Sub '/lowkey/${EnvironmentName}/webui-admin'
+      Description: !Sub 'Initial WebUI admin credentials for ${EnvironmentName}'
+      SecretString: !Sub '{"email":"${WebUIAdminEmail}","password":"pending-lambda-write"}'
+      Tags:
+        - Key: loki:managed
+          Value: 'true'
+        - Key: loki:pack
+          Value: !Ref PackName
+        - Key: loki:env
+          Value: !Ref EnvironmentName
+
   WebUIUserCreationRole:
     Type: AWS::IAM::Role
     Condition: EnableWebUI
@@ -1499,7 +1520,13 @@ Resources:
                 Action:
                   - cognito-idp:AdminCreateUser
                   - cognito-idp:AdminSetUserPassword
+                  - cognito-idp:AdminDeleteUser
                 Resource: !GetAtt WebUIUserPool.Arn
+              - Effect: Allow
+                Action:
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:UpdateSecret
+                Resource: !Ref WebUIAdminSecret
 
   WebUIUserCreationFunction:
     Type: AWS::Lambda::Function
@@ -1510,14 +1537,18 @@ Resources:
       Handler: index.handler
       Timeout: 60
       Role: !GetAtt WebUIUserCreationRole.Arn
+      Environment:
+        Variables:
+          SECRET_ARN: !Ref WebUIAdminSecret
       Code:
         ZipFile: |
-          import json, urllib.request, secrets, string, boto3
+          import json, os, urllib.request, secrets, string, boto3
 
-          def send_response(event, context, status, reason='', data={}):
+          def send_response(event, context, status, reason='', data=None):
+              data = data or {}
               reason_str = (reason or f'See CW: {context.log_stream_name}')[:256]
-              phys_id = (context.log_stream_name or 'custom-resource')[-64:]
-              safe_data = {k: str(v)[:128] for k, v in (data or {}).items()}
+              phys_id = (event.get('PhysicalResourceId') or context.log_stream_name or 'custom-resource')[-64:]
+              safe_data = {k: str(v)[:128] for k, v in data.items()}
               body = json.dumps({
                   'Status': status, 'Reason': reason_str,
                   'PhysicalResourceId': phys_id,
@@ -1541,24 +1572,13 @@ Resources:
               secrets.SystemRandom().shuffle(pwd)
               return ''.join(pwd)
 
-          def handler(event, context):
-              print(f'[INFO] Event: {json.dumps(event)}')
-              if event['RequestType'] == 'Delete':
-                  send_response(event, context, 'SUCCESS', 'Delete is a no-op')
-                  return
+          def write_secret(sm, secret_arn, email, password):
+              sm.put_secret_value(
+                  SecretId=secret_arn,
+                  SecretString=json.dumps({'email': email, 'password': password})
+              )
 
-              props = event.get('ResourceProperties', {})
-              pool_id = props.get('UserPoolId', '')
-              email = props.get('AdminEmail', '')
-              region = props.get('Region', 'us-east-1')
-
-              if not pool_id or not email:
-                  send_response(event, context, 'FAILED', 'Missing UserPoolId or AdminEmail')
-                  return
-
-              cognito = boto3.client('cognito-idp', region_name=region)
-              password = generate_password()
-
+          def create_or_reset_user(cognito, pool_id, email, password):
               try:
                   cognito.admin_create_user(
                       UserPoolId=pool_id,
@@ -1570,26 +1590,68 @@ Resources:
                       MessageAction='SUPPRESS'
                   )
               except cognito.exceptions.UsernameExistsException:
-                  send_response(event, context, 'SUCCESS', 'User already exists',
-                      {'Email': email, 'Password': '(existing user - password unchanged)'})
-                  return
-              except Exception as e:
-                  send_response(event, context, 'FAILED', f'User creation failed: {str(e)[:200]}')
-                  return
+                  # User exists (e.g. stack update or re-run); reset the password
+                  # so the credentials in Secrets Manager remain valid.
+                  pass
+              cognito.admin_set_user_password(
+                  UserPoolId=pool_id,
+                  Username=email,
+                  Password=***
+                  Permanent=True
+              )
 
+          def delete_user_safely(cognito, pool_id, email):
+              if not email:
+                  return
               try:
-                  cognito.admin_set_user_password(
-                      UserPoolId=pool_id,
-                      Username=email,
-                      Password=password,
-                      Permanent=True
-                  )
+                  cognito.admin_delete_user(UserPoolId=pool_id, Username=email)
+              except cognito.exceptions.UserNotFoundException:
+                  pass
               except Exception as e:
-                  send_response(event, context, 'FAILED', f'Password set failed: {str(e)[:200]}')
-                  return
+                  print(f'[WARN] Could not delete old user {email}: {e}')
 
-              send_response(event, context, 'SUCCESS', 'Initial user created',
-                  {'Email': email, 'Password': password})
+          def handler(event, context):
+              # Log event WITHOUT ResourceProperties (which may contain email)
+              print(f"[INFO] RequestType={event.get('RequestType')} LogicalId={event.get('LogicalResourceId')}")
+              try:
+                  if event['RequestType'] == 'Delete':
+                      # Secret and user pool are deleted by CFN — no manual cleanup needed
+                      send_response(event, context, 'SUCCESS', 'Delete is a no-op')
+                      return
+
+                  props = event.get('ResourceProperties', {})
+                  old_props = event.get('OldResourceProperties', {})
+                  pool_id = props.get('UserPoolId', '')
+                  email = props.get('AdminEmail', '')
+                  secret_arn = os.environ.get('SECRET_ARN', '')
+                  region = props.get('Region', os.environ.get('AWS_REGION', 'us-east-1'))
+
+                  if not pool_id or not email or not secret_arn:
+                      send_response(event, context, 'FAILED',
+                          'Missing UserPoolId, AdminEmail, or SECRET_ARN env')
+                      return
+
+                  cognito = boto3.client('cognito-idp', region_name=region)
+                  sm = boto3.client('secretsmanager', region_name=region)
+
+                  # On Update, if email changed, delete the old user first
+                  if event['RequestType'] == 'Update':
+                      old_email = old_props.get('AdminEmail', '')
+                      if old_email and old_email != email:
+                          delete_user_safely(cognito, pool_id, old_email)
+
+                  password = ***)
+                  create_or_reset_user(cognito, pool_id, email, password)
+                  write_secret(sm, secret_arn, email, password)
+
+                  # Return only non-sensitive data; password is in Secrets Manager
+                  send_response(event, context, 'SUCCESS', 'Admin user provisioned',
+                      {'Email': email, 'SecretArn': secret_arn})
+              except Exception as e:
+                  # Never log the password; only the exception class + short message
+                  err = f'{type(e).__name__}: {str(e)[:180]}'
+                  print(f'[ERROR] {err}')
+                  send_response(event, context, 'FAILED', err)
 
   WebUIUserCreationResource:
     Type: Custom::WebUIUserCreation
@@ -1816,8 +1878,8 @@ Outputs:
     Description: Email of the initial WebUI admin user
     Value: !Ref WebUIAdminEmail
 
-  WebUIAdminPassword:
+  WebUIAdminSecretArn:
     Condition: EnableWebUI
-    Description: One-time initial password for the WebUI admin user — save immediately, not retrievable later
-    Value: !GetAtt WebUIUserCreationResource.Password
+    Description: ARN of Secrets Manager secret holding initial WebUI admin credentials (email + password). Rotate/delete after first use.
+    Value: !Ref WebUIAdminSecret
 
