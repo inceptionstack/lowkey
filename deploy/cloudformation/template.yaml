@@ -1628,7 +1628,7 @@ Resources:
                   SecretString=json.dumps({'email': email, 'password': password})
               )
 
-          def write_edge_config(sm, secret_arn, pool_id, client_id, cognito_domain, signing_key):
+          def write_edge_config(sm, secret_arn, pool_id, client_id, cognito_domain, signing_key, cognito_region):
               sm.put_secret_value(
                   SecretId=secret_arn,
                   SecretString=json.dumps({
@@ -1636,6 +1636,7 @@ Resources:
                       'clientId': client_id,
                       'cognitoDomain': cognito_domain,
                       'signingKey': signing_key,
+                      'cognitoRegion': cognito_region,
                   })
               )
 
@@ -1727,7 +1728,7 @@ Resources:
                   # Both live in us-east-1 because the Lambda@Edge reads them there.
                   sk_resp = sm_edge.get_secret_value(SecretId=signing_key_secret_name)
                   signing_key = json.loads(sk_resp['SecretString'])['key']
-                  write_edge_config(sm_edge, edge_config_secret_name, pool_id, client_id, cognito_domain, signing_key)
+                  write_edge_config(sm_edge, edge_config_secret_name, pool_id, client_id, cognito_domain, signing_key, region)
 
                   send_response(event, context, 'SUCCESS', 'Admin user + edge config provisioned',
                       {'Email': email})

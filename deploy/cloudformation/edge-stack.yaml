@@ -113,6 +113,12 @@ Resources:
 
   WebUIEdgeLambdaVersion:
     Type: AWS::Lambda::Version
+    # Old versions cannot be deleted while CloudFront still references them
+    # (Lambda@Edge replicas take ~1hr to GC after CloudFront disassociates).
+    # Retain them on stack update/delete so a code refresh doesn't roll back
+    # the edge stack. Old versions are free — they accumulate harmlessly.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       FunctionName: !Ref WebUIEdgeLambdaFunction
       Description: !Sub 'KiroCrew WebUI Cognito auth (${EnvironmentName}) sha256=${EdgeLambdaCodeSha256}'

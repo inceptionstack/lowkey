@@ -26,15 +26,15 @@ const {
 } = require('@aws-sdk/client-secrets-manager');
 
 const CONFIG_SECRET_NAME = '__CONFIG_SECRET_NAME__';
-const REGION = 'us-east-1';
+const SECRETS_REGION = 'us-east-1';
 
 let authenticatorPromise = null;
 
 async function loadConfig() {
-  const sm = new SecretsManagerClient({ region: REGION });
+  const sm = new SecretsManagerClient({ region: SECRETS_REGION });
   const resp = await sm.send(new GetSecretValueCommand({ SecretId: CONFIG_SECRET_NAME }));
   const parsed = JSON.parse(resp.SecretString);
-  const required = ['poolId', 'clientId', 'cognitoDomain', 'signingKey'];
+  const required = ['poolId', 'clientId', 'cognitoDomain', 'signingKey', 'cognitoRegion'];
   const missing = required.filter((k) => !parsed[k] || typeof parsed[k] !== 'string' || parsed[k] === 'pending');
   if (missing.length > 0) {
     throw new Error(`Edge config secret missing or pending fields: ${missing.join(', ')}`);
@@ -47,21 +47,22 @@ async function getAuthenticator() {
   authenticatorPromise = (async () => {
     const cfg = await loadConfig();
     return new Authenticator({
-      region: REGION,
+      // cognito-at-edge uses this region for JWKS + token validation and
+      // Cognito API calls. It must match the region the user pool lives in
+      // (which is the main stack's DEPLOY_REGION, NOT us-east-1 where the
+      // Lambda@Edge itself is hosted).
+      region: cfg.cognitoRegion,
       userPoolId: cfg.poolId,
       userPoolAppId: cfg.clientId,
       userPoolDomain: cfg.cognitoDomain,
       cookieExpirationDays: 1,
       disableCookieDomain: true,
       logLevel: 'warn',
-      // cognito-at-edge expects nonceSigningSecret nested under csrfProtection.
-      // Top-level 'nonceSigningSecret' is silently ignored (round-3 P1 #1 fix).
       csrfProtection: {
         nonceSigningSecret: cfg.signingKey,
       },
     });
   })().catch((err) => {
-    // Reset so the next cold-start attempt can retry
     authenticatorPromise = null;
     throw err;
   });
