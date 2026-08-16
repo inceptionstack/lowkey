@@ -2143,7 +2143,7 @@ configure_webui_auth() {
     warn "WebUI authentication disabled; use SSM/VPN-only access."
     return 0
   fi
-  if [[ "${AUTO_YES:-false}" == true && ! -n "$user_email" ]]; then
+  if [[ "${AUTO_YES:-false}" == true && -z "$user_email" ]]; then
     fail "WebUI auth in non-interactive mode requires --webui-email <email>"
   fi
 
@@ -2176,10 +2176,11 @@ configure_webui_auth() {
       --admin-create-user-config '{"AllowAdminCreateUserOnly":true}' \
       --auto-verified-attributes email --username-attributes email \
       --schema '[{"Name":"email","Required":true,"Mutable":true}]' \
-      --user-pool-tags "loki:managed=true,loki:pack=${pack_name},loki:env=${ENV_NAME}" \
+      --user-pool-tags "{\"loki:managed\":\"true\",\"loki:pack\":\"${pack_name}\",\"loki:env\":\"${ENV_NAME}\"}" \
       --region "$DEPLOY_REGION" --output json 2>/dev/null) \
       || fail "Cognito user pool creation failed; verify cognito-idp permissions."
-    pool_id=$(echo "$pool_json" | json_field Id)
+    pool_id=$(echo "$pool_json" | jq -r '.UserPool.Id')
+    [[ -z "$pool_id" || "$pool_id" == "null" ]] && fail "Cognito pool created but returned no pool ID."
   else
     local pool_cfg allow_admin
     pool_cfg=$(aws cognito-idp describe-user-pool --user-pool-id "$pool_id" --region "$DEPLOY_REGION" --output json 2>/dev/null) \
@@ -2199,7 +2200,7 @@ configure_webui_auth() {
     --access-token-validity 1 --id-token-validity 1 --refresh-token-validity 30 \
     --region "$DEPLOY_REGION" --output json 2>/dev/null) \
     || fail "Cognito app client creation failed for pool ${pool_id}."
-  client_id=$(echo "$client_json" | json_field ClientId)
+  client_id=$(echo "$client_json" | jq -r '.UserPoolClient.ClientId')
   [[ -z "$client_id" || "$client_id" == null ]] && fail "Cognito returned no app client ID."
 
   suffix=$(python3 -c 'import secrets; print(secrets.token_hex(3))')
@@ -2232,8 +2233,17 @@ configure_webui_auth() {
   export WEBUI_AUTH_ENABLED="true" WEBUI_COGNITO_POOL_ID="$pool_id" WEBUI_COGNITO_CLIENT_ID="$client_id"
   export WEBUI_COGNITO_DOMAIN="${domain_prefix}.auth.${DEPLOY_REGION}.amazoncognito.com"
   export WEBUI_COGNITO_REGION="$DEPLOY_REGION" WEBUI_CALLBACK_URL="$callback_url" WEBUI_LOGOUT_URL="$logout_url"
-  ok "WebUI protected with Cognito (login: ${user_email}, password: ${password})"
-  info "Save this password now; it will not be shown again."
+  ok "WebUI protected with Cognito"
+  echo ""
+  $GUM style --border rounded --border-foreground 220 --padding "1 2" --margin "0 2" \
+    "⚠  SAVE THESE CREDENTIALS — shown only once" \
+    "" \
+    "  Login:    ${user_email}" \
+    "  Password: ${password}" \
+    "" \
+    "  Pool:     ${pool_id}" \
+    "  Region:   ${DEPLOY_REGION}"
+  echo ""
 }
 
 collect_config() {
