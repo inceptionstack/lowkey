@@ -673,7 +673,6 @@ AUTO_RENAME_ACCOUNT=false
 DISABLE_ACCOUNT_RENAME=false
 WEBUI_EMAIL=""
 WEBUI_NO_AUTH=false
-WEBUI_POOL_ID=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --non-interactive|--yes|-y) AUTO_YES=true; shift ;;
@@ -749,12 +748,6 @@ while [[ $# -gt 0 ]]; do
       fi
       WEBUI_EMAIL="$2"; shift 2 ;;
     --webui-no-auth) WEBUI_NO_AUTH=true; shift ;;
-    --webui-pool-id)
-      if [[ $# -lt 2 || "$2" == --* ]]; then
-        echo -e "\033[0;31m✗\033[0m --webui-pool-id requires a Cognito user pool ID" >&2
-        exit 1
-      fi
-      WEBUI_POOL_ID="$2"; shift 2 ;;
     --debug-in-repo) DEBUG_IN_REPO=true; shift ;;
     --test|--dry-run) TEST_MODE=true; shift ;;
     --auto-rename-account-enabled) AUTO_RENAME_ACCOUNT=true; shift ;;
@@ -792,7 +785,6 @@ Options:
                                  (roundhouse pack, without @)
   --webui-email <email>          Email for the initial WebUI user
   --webui-no-auth                Skip Cognito WebUI authentication setup
-  --webui-pool-id <id>           Use an existing Cognito user pool
   --debug-in-repo                Dev-only: run installer from cwd
   --test, --dry-run              Run installer end-to-end without
                                  provisioning AWS resources. Telemetry
@@ -3487,7 +3479,7 @@ main() {
 
   # Post-deploy: read Cognito outputs from the stack and display admin credentials
   if [[ "${WEBUI_AUTH_ENABLED:-false}" == "true" ]]; then
-    local stack_outputs pool_id client_id domain admin_email admin_password dashboard_url
+    local stack_outputs pool_id client_id domain admin_email admin_password secret_arn dashboard_url
     stack_outputs=$(aws cloudformation describe-stacks --stack-name "${ENV_NAME}" \
       --region "$DEPLOY_REGION" --output json 2>/dev/null | jq -r '.Stacks[0].Outputs')
     if [[ -n "$stack_outputs" && "$stack_outputs" != "null" ]]; then
@@ -3495,12 +3487,18 @@ main() {
       client_id=$(echo "$stack_outputs" | jq -r '.[] | select(.OutputKey=="WebUICognitoClientId") | .OutputValue')
       domain=$(echo "$stack_outputs" | jq -r '.[] | select(.OutputKey=="WebUICognitoDomain") | .OutputValue')
       admin_email=$(echo "$stack_outputs" | jq -r '.[] | select(.OutputKey=="WebUIAdminEmailOutput") | .OutputValue')
-      admin_password=$(echo "$stack_outputs" | jq -r '.[] | select(.OutputKey=="WebUIAdminPassword") | .OutputValue')
+      secret_arn=$(echo "$stack_outputs" | jq -r '.[] | select(.OutputKey=="WebUIAdminSecretArn") | .OutputValue')
       dashboard_url=$(echo "$stack_outputs" | jq -r '.[] | select(.OutputKey=="KiroCrewDashboardUrl") | .OutputValue')
+      admin_password=""
+      if [[ -n "$secret_arn" && "$secret_arn" != "null" ]]; then
+        admin_password=$(aws secretsmanager get-secret-value --secret-id "$secret_arn" \
+          --region "$DEPLOY_REGION" --query SecretString --output text 2>/dev/null \
+          | jq -r '.password // empty')
+      fi
       if [[ -n "$admin_email" && "$admin_email" != "null" ]]; then
         echo ""
         $GUM style --border rounded --border-foreground 220 --padding "1 2" --margin "0 2" \
-          "⚠  SAVE THESE CREDENTIALS — shown only once" \
+          "⚠  WEBUI ADMIN CREDENTIALS — stored in Secrets Manager" \
           "" \
           "  Dashboard: ${dashboard_url}" \
           "  Login:     ${admin_email}" \
@@ -3508,7 +3506,9 @@ main() {
           "" \
           "  Pool:      ${pool_id}" \
           "  Client:    ${client_id}" \
-          "  Domain:    ${domain}"
+          "  Domain:    ${domain}" \
+          "" \
+          "  Secret:    ${secret_arn}"
         echo ""
       fi
     fi
