@@ -412,6 +412,16 @@ Rules:
       - Assert: !Not [!Equals [!Ref WebUIAdminEmail, '']]
         AssertDescription: "WebUIAdminEmail is required when EnableWebUIAuth is true."
 
+  WebUIEdgeRequiresUsEast1:
+    RuleCondition: !Equals [!Ref EnableWebUIAuth, 'true']
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', 'us-east-1']
+        AssertDescription: "EnableWebUIAuth requires deploying in us-east-1 (Lambda@Edge is a CloudFront-only resource that must live in us-east-1)."
+      - Assert: !Not [!Equals [!Ref EdgeLambdaS3Bucket, '']]
+        AssertDescription: "EdgeLambdaS3Bucket is required when EnableWebUIAuth is true (installer uploads the Lambda@Edge zip and sets this)."
+      - Assert: !Not [!Equals [!Ref EdgeLambdaS3Key, '']]
+        AssertDescription: "EdgeLambdaS3Key is required when EnableWebUIAuth is true (installer uploads the Lambda@Edge zip and sets this)."
+
 # ============================================================================
 # CONDITIONS
 # ============================================================================
@@ -1544,7 +1554,7 @@ Resources:
                   - secretsmanager:UpdateSecret
                 Resource:
                   - !Ref WebUIAdminSecret
-                  - !Ref WebUIEdgeSigningKeySecret
+                  - !Ref WebUIEdgeConfigSecret
               - Effect: Allow
                 Action:
                   - secretsmanager:GetSecretValue
@@ -1658,7 +1668,7 @@ Resources:
                   cognito_domain = props.get('CognitoDomain', '')
                   email = props.get('AdminEmail', '')
                   admin_secret_arn = props.get('AdminSecretArn', '')
-                  edge_secret_arn = props.get('EdgeSecretArn', '')
+                  edge_config_secret_arn = props.get('EdgeConfigSecretArn', '')
                   signing_key_secret_arn = props.get('SigningKeySecretArn', '')
                   region = props.get('Region', os.environ.get('AWS_REGION', 'us-east-1'))
 
@@ -1668,7 +1678,7 @@ Resources:
                       'CognitoDomain': cognito_domain,
                       'AdminEmail': email,
                       'AdminSecretArn': admin_secret_arn,
-                      'EdgeSecretArn': edge_secret_arn,
+                      'EdgeConfigSecretArn': edge_config_secret_arn,
                       'SigningKeySecretArn': signing_key_secret_arn,
                   }.items() if not v]
                   if missing:
@@ -1690,9 +1700,12 @@ Resources:
                   write_admin_secret(sm, admin_secret_arn, email, password)
 
                   # 2) Read the CFN-generated signing key and write the merged edge config
+                  # NOTE: signing_key_secret_arn and edge_config_secret_arn are DIFFERENT secrets.
+                  # The signing-key secret is CFN-managed (immutable content); the config secret
+                  # is what the Lambda@Edge reads at cold start.
                   sk_resp = sm.get_secret_value(SecretId=signing_key_secret_arn)
                   signing_key = json.loads(sk_resp['SecretString'])['key']
-                  write_edge_config(sm, edge_secret_arn, pool_id, client_id, cognito_domain, signing_key)
+                  write_edge_config(sm, edge_config_secret_arn, pool_id, client_id, cognito_domain, signing_key)
 
                   send_response(event, context, 'SUCCESS', 'Admin user + edge config provisioned',
                       {'Email': email})
@@ -1707,6 +1720,7 @@ Resources:
       - WebUIUserPool
       - WebUIUserPoolClient
       - WebUIEdgeSigningKeySecret
+      - WebUIEdgeConfigSecret
     Properties:
       ServiceToken: !GetAtt WebUIUserCreationFunction.Arn
       UserPoolId: !Ref WebUIUserPool
@@ -1714,24 +1728,46 @@ Resources:
       CognitoDomain: !Sub '${WebUIUserPoolDomain}.auth.${AWS::Region}.amazoncognito.com'
       AdminEmail: !Ref WebUIAdminEmail
       AdminSecretArn: !Ref WebUIAdminSecret
-      EdgeSecretArn: !Ref WebUIEdgeSigningKeySecret
+      EdgeConfigSecretArn: !Ref WebUIEdgeConfigSecret
       SigningKeySecretArn: !Ref WebUIEdgeSigningKeySecret
       Region: !Ref 'AWS::Region'
 
   # --------------------------------------------------------------------------
   # WebUI Lambda@Edge (Cognito enforcement on CloudFront)
   # --------------------------------------------------------------------------
+  # Two secrets:
+  # - SigningKeySecret: raw HMAC key, CFN-managed via GenerateSecretString.
+  #   Never rewritten by the Custom Resource. Read once by the Custom Resource
+  #   to merge into EdgeConfigSecret.
+  # - EdgeConfigSecret: the merged config {poolId, clientId, cognitoDomain,
+  #   signingKey} that the Lambda@Edge reads at cold start. Populated by the
+  #   Custom Resource after Cognito resources are created.
   WebUIEdgeSigningKeySecret:
     Type: AWS::SecretsManager::Secret
     Condition: EnableWebUI
     Properties:
       Name: !Sub '/lowkey/${EnvironmentName}/webui-edge-signing-key'
-      Description: !Sub 'Nonce/state HMAC signing key for KiroCrew WebUI Lambda@Edge (${EnvironmentName})'
+      Description: !Sub 'Raw HMAC signing key for KiroCrew WebUI Lambda@Edge (${EnvironmentName})'
       GenerateSecretString:
         SecretStringTemplate: '{}'
         GenerateStringKey: 'key'
         PasswordLength: 64
         ExcludePunctuation: true
+      Tags:
+        - Key: loki:managed
+          Value: 'true'
+        - Key: loki:pack
+          Value: !Ref PackName
+        - Key: loki:env
+          Value: !Ref EnvironmentName
+
+  WebUIEdgeConfigSecret:
+    Type: AWS::SecretsManager::Secret
+    Condition: EnableWebUI
+    Properties:
+      Name: !Sub '/lowkey/${EnvironmentName}/webui-edge-config'
+      Description: !Sub 'Merged Cognito config for KiroCrew WebUI Lambda@Edge (${EnvironmentName})'
+      SecretString: !Sub '{"poolId":"pending","clientId":"pending","cognitoDomain":"pending","signingKey":"pending"}'
       Tags:
         - Key: loki:managed
           Value: 'true'

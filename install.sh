@@ -2176,12 +2176,13 @@ build_and_upload_edge_lambda() {
   step "WebUI Lambda@Edge"
   info "Building Cognito Lambda@Edge zip..."
 
-  # Deterministic secret NAME (not ARN — Secrets Manager appends a random suffix
-  # to the ARN we can't know at build time, but names are stable).
-  local secret_name="/lowkey/${ENV_NAME}/webui-edge-signing-key"
+  # Deterministic config secret NAME (not ARN — Secrets Manager appends a random suffix
+  # to the ARN we can't know at build time, but names are stable). The Lambda@Edge
+  # bakes this name in and fetches the merged config at cold start.
+  local secret_name="/lowkey/${ENV_NAME}/webui-edge-config"
 
   local zip_path
-  zip_path=$(SECRET_ARN="$secret_name" "$build_script" 2>&1 | tail -1) \
+  zip_path=$(CONFIG_SECRET_NAME="$secret_name" "$build_script" 2>&1 | tail -1) \
     || fail "Edge Lambda build failed: $zip_path"
   if [[ ! -f "$zip_path" ]]; then
     fail "Edge Lambda build script did not produce a zip: $zip_path"
@@ -3512,15 +3513,16 @@ main() {
 
   # Console deploy exits early (no clone, no bootstrap wait)
   if [[ "$DEPLOY_METHOD" == "$DEPLOY_CFN_CONSOLE" ]]; then
+    # P1 #5: Console mode can't build+upload the edge Lambda zip (no local
+    # clone, no shell access post-flow). WebUI auth requires CLI deploy.
+    if [[ "${WEBUI_AUTH_ENABLED:-false}" == "true" ]]; then
+      fail "WebUI authentication is not supported with the CloudFormation Console deploy method. Re-run and choose 'CloudFormation CLI' when prompted, or disable WebUI auth."
+    fi
     TOTAL_STEPS=5
     _TELEM_CURRENT_STEP="deploy_console"
     _telem_deploy_started 2>/dev/null || true
     step "Deploy (Console)"
     deploy_console
-    if [[ "${WEBUI_AUTH_ENABLED:-false}" == "true" ]]; then
-      info "After deploying the stack, retrieve the initial admin password from stack outputs:"
-      info "  aws cloudformation describe-stacks --stack-name <name> --region ${DEPLOY_REGION} --query 'Stacks[0].Outputs' --output table"
-    fi
     _telem_install_completed 2>/dev/null || true
     exit 0
   fi

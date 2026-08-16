@@ -2,20 +2,20 @@
  * KiroCrew WebUI Cognito Auth — Lambda@Edge (viewer-request trigger).
  *
  * Validates a Cognito session cookie set by cognito-at-edge. Unauthenticated
- * requests are redirected to Cognito hosted UI. Requests to /auth/callback
+ * requests are redirected to the Cognito hosted UI. Requests to /auth/callback
  * exchange the auth code for tokens and set the session cookie.
  *
  * Lambda@Edge constraints:
  *   - No environment variables (config baked in below OR fetched from Secrets Manager)
  *   - Node.js 18.x runtime
- *   - Must be deployed in us-east-1
+ *   - Must be deployed in us-east-1 (enforced by CFN Rule WebUIEdgeRequiresUsEast1)
  *
- * Only SECRET_ARN is substituted at build time. All other config (pool ID,
- * client ID, domain, signing key) is fetched from Secrets Manager on cold
- * start, cached in module scope for warm invocations.
+ * Only CONFIG_SECRET_NAME is substituted at build time. All other config
+ * (pool ID, client ID, domain, signing key) is fetched from Secrets Manager
+ * on cold start, cached in module scope for warm invocations.
  *
  * This lets us zip the Lambda code BEFORE CFN creates the Cognito pool —
- * the Lambda only needs the secret's ARN, which is a deterministic function
+ * the Lambda only needs the secret's name, which is a deterministic function
  * of the stack's environment name.
  */
 
@@ -25,21 +25,19 @@ const {
   GetSecretValueCommand,
 } = require('@aws-sdk/client-secrets-manager');
 
-// Only placeholder replaced at build time. All other config comes from the secret.
-const SECRET_ARN = '__SECRET_NAME__';
+const CONFIG_SECRET_NAME = '__CONFIG_SECRET_NAME__';
 const REGION = 'us-east-1';
 
 let authenticatorPromise = null;
 
 async function loadConfig() {
   const sm = new SecretsManagerClient({ region: REGION });
-  const resp = await sm.send(new GetSecretValueCommand({ SecretId: SECRET_ARN }));
+  const resp = await sm.send(new GetSecretValueCommand({ SecretId: CONFIG_SECRET_NAME }));
   const parsed = JSON.parse(resp.SecretString);
   const required = ['poolId', 'clientId', 'cognitoDomain', 'signingKey'];
-  for (const k of required) {
-    if (!parsed[k] || typeof parsed[k] !== 'string') {
-      throw new Error(`Edge auth secret is missing required field: ${k}`);
-    }
+  const missing = required.filter((k) => !parsed[k] || typeof parsed[k] !== 'string' || parsed[k] === 'pending');
+  if (missing.length > 0) {
+    throw new Error(`Edge config secret missing or pending fields: ${missing.join(', ')}`);
   }
   return parsed;
 }
