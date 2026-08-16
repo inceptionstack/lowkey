@@ -1534,6 +1534,7 @@ Resources:
         - !Sub 'https://${KiroCrewDistribution.DomainName}/auth/callback'
         - 'http://localhost:5476/auth/callback'
       LogoutURLs:
+        - !Sub 'https://${KiroCrewDistribution.DomainName}/logout'
         - !Sub 'https://${KiroCrewDistribution.DomainName}/'
         - 'http://localhost:5476/'
       PreventUserExistenceErrors: ENABLED

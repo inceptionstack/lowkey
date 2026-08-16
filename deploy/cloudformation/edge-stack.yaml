@@ -34,6 +34,12 @@ Parameters:
     MinLength: 1
     Description: "Base64 SHA256 of the deployment zip. Forces a new AWS::Lambda::Version when code changes."
 
+Rules:
+  WebUIEdgeRequiresUsEast1:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', 'us-east-1']
+        AssertDescription: "Lambda@Edge companion stack must be deployed in us-east-1."
+
 Resources:
   # Raw HMAC signing key. CFN-managed via GenerateSecretString. Never written
   # to by anything else — read once by the main-stack Custom Resource which

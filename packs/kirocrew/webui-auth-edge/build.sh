@@ -45,6 +45,8 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
 
 cp "$SCRIPT_DIR/index.js" "$BUILD_DIR/index.js"
 cp "$SCRIPT_DIR/package.json" "$BUILD_DIR/package.json"
+cp "$SCRIPT_DIR/package-lock.json" "$BUILD_DIR/package-lock.json"
+cp "$SCRIPT_DIR/.npmrc" "$BUILD_DIR/.npmrc"
 
 # Substitute only CONFIG_SECRET_NAME placeholder
 sed -i -e "s|__CONFIG_SECRET_NAME__|${CONFIG_SECRET_NAME}|g" "$BUILD_DIR/index.js"
@@ -56,7 +58,7 @@ if grep -q '__[A-Z_]*__' "$BUILD_DIR/index.js"; then
 fi
 
 cd "$BUILD_DIR"
-npm install --production --no-audit --no-fund --loglevel=error >&2
+npm ci --omit=dev --no-audit --no-fund --loglevel=error >&2 >&2
 
 # Content-addressed zip name: hash the actual ZIP BYTES (not source files) so
 # the S3 key stays in lockstep with CodeSha256 in CFN. Round-3 fix (P1 #2):
@@ -83,7 +85,7 @@ sha256_hex() {
 TMP_ZIP="${OUT_DIR}/.edge-lambda-tmp-$$.zip"
 trap 'rm -f "$TMP_ZIP"; rm -rf "$BUILD_DIR"' EXIT
 rm -f "$TMP_ZIP"
-zip -r -q -X "$TMP_ZIP" index.js package.json node_modules >&2
+zip -r -q -X "$TMP_ZIP" index.js package.json package-lock.json node_modules >&2
 
 ZIP_SHA=$(sha256_hex "$TMP_ZIP") || exit 7
 SHA_SHORT="${ZIP_SHA:0:16}"

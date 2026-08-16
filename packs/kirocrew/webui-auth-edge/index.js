@@ -72,6 +72,10 @@ async function getAuthenticator() {
       httpOnly: true,
       sameSite: 'Lax',
       disableCookieDomain: true,
+      logoutConfiguration: {
+        logoutUri: '/logout',
+        logoutRedirectUri: '/',
+      },
       logLevel: 'warn',
       csrfProtection: {
         nonceSigningSecret: cfg.signingKey,

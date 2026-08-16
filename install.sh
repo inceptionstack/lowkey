@@ -2204,6 +2204,9 @@ build_and_upload_edge_lambda() {
     aws s3api create-bucket --bucket "$bucket" --region us-east-1 \
       >/dev/null 2>&1 || fail "Failed to create bucket $bucket"
   fi
+  aws s3api put-bucket-encryption --bucket "$bucket" \
+    --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"},"BucketKeyEnabled":true}]}' \
+    --region us-east-1 >/dev/null 2>&1 || true
   aws s3api put-bucket-versioning --bucket "$bucket" --versioning-configuration Status=Enabled \
     --region us-east-1 >/dev/null 2>&1 || fail "Failed to enable versioning on $bucket"
   aws s3api put-public-access-block --bucket "$bucket" --region us-east-1 \
