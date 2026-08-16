@@ -3586,7 +3586,7 @@ main() {
     local cf_url=""
     cf_url=$(aws cloudformation describe-stacks --stack-name "${ENV_NAME}" \
       --region "$DEPLOY_REGION" --output json 2>/dev/null \
-      | jq -r '.Stacks[0].Outputs[] | select(.OutputKey=="CloudFrontURL" or .OutputKey=="DashboardURL" or .OutputKey=="WebUIURL") | .OutputValue' \
+      | jq -r '.Stacks[0].Outputs[] | select(.OutputKey=="CloudFrontURL" or .OutputKey=="DashboardURL" or .OutputKey=="WebUIURL" or .OutputKey=="KiroCrewDashboardUrl") | .OutputValue' \
       | head -1)
     if [[ -n "$cf_url" && "$cf_url" != "null" ]]; then
       # Normalize: strip trailing slash, add callback path
