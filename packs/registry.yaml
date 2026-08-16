@@ -131,4 +131,4 @@ packs:
       gateway: 5476
     brain: false
     claude_code: false
-    experimental: true
+    experimental: false
