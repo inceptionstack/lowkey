@@ -2155,6 +2155,66 @@ configure_webui_auth() {
   info "Initial password will be shown after stack deploys."
 }
 
+# ============================================================================
+# WebUI Lambda@Edge zip build + S3 upload (KiroCrew, when auth enabled)
+# ============================================================================
+# Builds the Cognito-at-Edge zip, uploads it to the CFN templates bucket, and
+# exports EDGE_LAMBDA_S3_BUCKET/EDGE_LAMBDA_S3_KEY so build_deploy_params can
+# feed them to the stack as CFN parameters.
+build_and_upload_edge_lambda() {
+  [[ "${WEBUI_AUTH_ENABLED:-false}" == "true" ]] || return 0
+  [[ "$PACK_NAME" == "kirocrew" ]] || return 0
+
+  local build_script="${CLONE_DIR}/packs/kirocrew/webui-auth-edge/build.sh"
+  # In debug-in-repo mode CLONE_DIR points into the working repo; otherwise it
+  # points at the freshly-cloned copy. In either case the script must exist
+  # AFTER prepare_repo has run. This function is called from that point.
+  if [[ ! -x "$build_script" ]]; then
+    fail "Edge Lambda build script missing: $build_script"
+  fi
+
+  step "WebUI Lambda@Edge"
+  info "Building Cognito Lambda@Edge zip..."
+
+  # Deterministic secret NAME (not ARN — Secrets Manager appends a random suffix
+  # to the ARN we can't know at build time, but names are stable).
+  local secret_name="/lowkey/${ENV_NAME}/webui-edge-signing-key"
+
+  local zip_path
+  zip_path=$(SECRET_ARN="$secret_name" "$build_script" 2>&1 | tail -1) \
+    || fail "Edge Lambda build failed: $zip_path"
+  if [[ ! -f "$zip_path" ]]; then
+    fail "Edge Lambda build script did not produce a zip: $zip_path"
+  fi
+
+  local bucket="${ENV_NAME}-cfn-templates-${ACCOUNT_ID}"
+  local key="edge/$(basename "$zip_path")"
+
+  # The CFN templates bucket was created by deploy_cfn_stack in earlier flows,
+  # but Lambda@Edge zip must be uploaded BEFORE the stack that references it.
+  # Ensure the bucket exists (idempotent).
+  if ! aws s3api head-bucket --bucket "$bucket" --region "$DEPLOY_REGION" 2>/dev/null; then
+    info "Creating edge Lambda bucket: $bucket"
+    aws s3api create-bucket --bucket "$bucket" --region "$DEPLOY_REGION" \
+      $(if [[ "$DEPLOY_REGION" != "us-east-1" ]]; then echo "--create-bucket-configuration LocationConstraint=$DEPLOY_REGION"; fi) \
+      >/dev/null 2>&1 || fail "Failed to create bucket $bucket"
+    aws s3api put-bucket-versioning --bucket "$bucket" \
+      --versioning-configuration Status=Enabled --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
+    aws s3api put-public-access-block --bucket "$bucket" --region "$DEPLOY_REGION" \
+      --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true \
+      >/dev/null 2>&1 || true
+  fi
+
+  info "Uploading edge Lambda zip: s3://${bucket}/${key} ($(wc -c < "$zip_path") bytes)"
+  aws s3 cp "$zip_path" "s3://${bucket}/${key}" --region "$DEPLOY_REGION" >/dev/null \
+    || fail "Failed to upload edge Lambda zip"
+
+  export EDGE_LAMBDA_S3_BUCKET="$bucket"
+  export EDGE_LAMBDA_S3_KEY="$key"
+  ok "Edge Lambda uploaded"
+}
+
+
 collect_config() {
   step "Configuration"
 
@@ -2288,7 +2348,7 @@ collect_security_config() {
 # Parameter source-of-truth: single mapping for CFN Console and CFN CLI
 # ============================================================================
 # ⚠ KEEP THESE TWO ARRAYS IN SYNC — same order, same count
-PARAM_CFN_NAMES=(EnvironmentName PackName ProfileName InstanceType DefaultModel ModelMode BedrockRegion LokiWatermark EnableBedrockForm EnableSecurityHub EnableGuardDuty EnableInspector EnableAccessAnalyzer EnableConfigRecorder ExistingVpcId ExistingSubnetId ExistingSubnetId2 RepoBranch KiroFromSecret TelegramBotTokenSecret TelegramUser Primary DailyDriver CodexModel EnableWebUIAuth WebUIAdminEmail)
+PARAM_CFN_NAMES=(EnvironmentName PackName ProfileName InstanceType DefaultModel ModelMode BedrockRegion LokiWatermark EnableBedrockForm EnableSecurityHub EnableGuardDuty EnableInspector EnableAccessAnalyzer EnableConfigRecorder ExistingVpcId ExistingSubnetId ExistingSubnetId2 RepoBranch KiroFromSecret TelegramBotTokenSecret TelegramUser Primary DailyDriver CodexModel EnableWebUIAuth WebUIAdminEmail EdgeLambdaS3Bucket EdgeLambdaS3Key)
 PARAM_VALUES=()  # populated by build_deploy_params()
 
 # Per-pack default model (passed to CFN DefaultModel / bootstrap.sh --model).
@@ -2350,6 +2410,8 @@ build_deploy_params() {
     "${TROIKA_CODEX_MODEL:-openai.gpt-5.5}"
     "${WEBUI_AUTH_ENABLED:-false}"
     "${WEBUI_ADMIN_EMAIL:-}"
+    "${EDGE_LAMBDA_S3_BUCKET:-}"
+    "${EDGE_LAMBDA_S3_KEY:-}"
   )
   # Validate parallel arrays are in sync
   [[ ${#PARAM_CFN_NAMES[@]} -eq ${#PARAM_VALUES[@]} ]] \
@@ -3469,6 +3531,8 @@ main() {
   step "Deploy"
   prepare_repo
   echo ""
+
+  build_and_upload_edge_lambda
 
   case "$DEPLOY_METHOD" in
     "$DEPLOY_CFN_CLI") info "Deploying with CloudFormation..."
