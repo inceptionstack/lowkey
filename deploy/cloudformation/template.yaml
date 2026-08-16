@@ -1573,7 +1573,8 @@ Resources:
                   send_response(event, context, 'SUCCESS', 'User already exists',
                       {'Email': email, 'Password': '(existing user - password unchanged)'})
                   return
-              except Exception as e:\n                  send_response(event, context, 'FAILED', f'User creation failed: {str(e)[:200]}')
+              except Exception as e:
+                  send_response(event, context, 'FAILED', f'User creation failed: {str(e)[:200]}')
                   return
 
               try:
@@ -1583,7 +1584,8 @@ Resources:
                       Password=password,
                       Permanent=True
                   )
-              except Exception as e:\n                  send_response(event, context, 'FAILED', f'Password set failed: {str(e)[:200]}')
+              except Exception as e:
+                  send_response(event, context, 'FAILED', f'Password set failed: {str(e)[:200]}')
                   return
 
               send_response(event, context, 'SUCCESS', 'Initial user created',
@@ -1793,4 +1795,29 @@ Outputs:
     Condition: IsKiroCrew
     Description: KiroCrew ALB DNS name (do not access directly - use CloudFront)
     Value: !GetAtt KiroCrewALB.DNSName
+
+  WebUICognitoPoolId:
+    Condition: EnableWebUI
+    Description: Cognito User Pool ID for WebUI auth
+    Value: !Ref WebUIUserPool
+
+  WebUICognitoClientId:
+    Condition: EnableWebUI
+    Description: Cognito App Client ID for WebUI auth
+    Value: !Ref WebUIUserPoolClient
+
+  WebUICognitoDomain:
+    Condition: EnableWebUI
+    Description: Cognito hosted-UI domain
+    Value: !Sub '${WebUIUserPoolDomain}.auth.${AWS::Region}.amazoncognito.com'
+
+  WebUIAdminEmailOutput:
+    Condition: EnableWebUI
+    Description: Email of the initial WebUI admin user
+    Value: !Ref WebUIAdminEmail
+
+  WebUIAdminPassword:
+    Condition: EnableWebUI
+    Description: One-time initial password for the WebUI admin user — save immediately, not retrievable later
+    Value: !GetAtt WebUIUserCreationResource.Password
 
