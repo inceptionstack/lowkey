@@ -147,7 +147,7 @@ aws cognito-idp create-user-pool-client \
   --no-generate-secret \
   --explicit-auth-flows ALLOW_USER_SRP_AUTH ALLOW_REFRESH_TOKEN_AUTH \
   --supported-identity-providers COGNITO \
-  --allowed-o-auth-flows code \
+  --allowed-o-auth-flows code --allowed-o-auth-flows-user-pool-client \
   --allowed-o-auth-scopes openid email \
   --callback-urls "[\"${CALLBACK_URL}\"]" \
   --logout-urls "[\"${LOGOUT_URL}\"]" \
@@ -191,11 +191,18 @@ aws cognito-idp create-user-pool-domain \
 - Generate password: 16 chars, cryptographically random (mixed case + digits + symbols)
 
 ```bash
-# Generate secure random password
+# Generate secure random password (guaranteed to satisfy all character classes)
 WEBUI_PASSWORD=$(python3 -c "
 import secrets, string
-alphabet = string.ascii_letters + string.digits + '!@#$%&*'
-print(''.join(secrets.choice(alphabet) for _ in range(16)))
+# Guarantee at least one of each required class
+upper = secrets.choice(string.ascii_uppercase)
+lower = secrets.choice(string.ascii_lowercase)
+digit = secrets.choice(string.digits)
+symbol = secrets.choice('!@#\$%&*')
+remainder = [secrets.choice(string.ascii_letters + string.digits + '!@#\$%&*') for _ in range(12)]
+password = [upper, lower, digit, symbol] + remainder
+secrets.SystemRandom().shuffle(password)
+print(''.join(password))
 ")
 
 # Create user with permanent password (skip force-change-password)

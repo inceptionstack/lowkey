@@ -1928,33 +1928,23 @@ choose_pack() {
   fi
 
   # Simple mode + non-interactive: auto-select kirocrew without gum
+  # TODO(unattended): v1 is interactive wizard only. Unattended (-y) support for
+  # KiroCrew (credential collection, --webui-email passthrough) will be added in
+  # a future iteration. For now, non-interactive falls back to openclaw.
   if [[ "$INSTALL_MODE" == "simple" && "$AUTO_YES" == true ]]; then
-    PACK_NAME="kirocrew"
-    # Validate kirocrew exists in registry; fall back to openclaw
+    # Unattended: fall back to openclaw (no WebUI auth prompting needed)
+    PACK_NAME="openclaw"
     local found_auto=false
     for i in "${!PACK_NAMES[@]}"; do
       if [[ "${PACK_NAMES[$i]}" == "$PACK_NAME" ]]; then
         found_auto=true
-        if [[ "${PACK_EXPERIMENTAL[$i]}" == "true" ]]; then
-          warn "${PACK_NAME} is experimental — expect rough edges"
-        fi
         break
       fi
     done
     if [[ "$found_auto" != true ]]; then
-      # Validate fallback exists too
-      local fallback_found=false
-      for i in "${!PACK_NAMES[@]}"; do
-        [[ "${PACK_NAMES[$i]}" == "openclaw" ]] && fallback_found=true && break
-      done
-      if [[ "$fallback_found" == true ]]; then
-        PACK_NAME="openclaw"
-        warn "kirocrew not found in registry — falling back to openclaw"
-      else
-        fail "Neither kirocrew nor openclaw found in registry. Check packs/registry.json."
-      fi
+      fail "openclaw not found in registry. Check packs/registry.json."
     fi
-    ok "Agent: ${PACK_NAME} (auto-selected)"
+    ok "Agent: ${PACK_NAME} (auto-selected, unattended)"
     return
   fi
 
@@ -2142,7 +2132,11 @@ configure_webui_auth() {
     return 0
   fi
   if [[ "${AUTO_YES:-false}" == true && -z "$user_email" ]]; then
-    fail "WebUI auth in non-interactive mode requires --webui-email <email>"
+    # TODO(unattended): In a future version, --webui-email will be supported for
+    # fully unattended KiroCrew installs. For now, skip auth in non-interactive mode.
+    warn "Non-interactive mode without --webui-email; skipping WebUI auth."
+    warn "Use SSM port-forward or VPN-only access."
+    return 0
   fi
 
   if [[ -z "$pool_id" ]]; then
@@ -2183,8 +2177,8 @@ configure_webui_auth() {
     local pool_cfg allow_admin
     pool_cfg=$(aws cognito-idp describe-user-pool --user-pool-id "$pool_id" --region "$DEPLOY_REGION" --output json 2>/dev/null) \
       || fail "Unable to describe Cognito pool ${pool_id}; verify the pool ID and region."
-    allow_admin=$(echo "$pool_cfg" | jq -r '.UserPool.AdminCreateUserConfig.AllowAdminCreateUserOnly // true')
-    [[ "$allow_admin" != true ]] && fail "Existing pool ${pool_id} permits self-signup; choose a pool with admin-only user creation."
+    allow_admin=$(echo "$pool_cfg" | jq -r '.UserPool.AdminCreateUserConfig.AllowAdminCreateUserOnly | if . == false then "false" elif . == null then "true" else tostring end')
+    [[ "$allow_admin" != "true" ]] && fail "Existing pool ${pool_id} permits self-signup; choose a pool with admin-only user creation."
   fi
 
   local client_json
@@ -3558,6 +3552,13 @@ main() {
     _telem_deploy_started 2>/dev/null || true
     step "Deploy (Console)"
     deploy_console
+    # TODO(post-deploy): Console deploy exits here; user deploys stack manually.
+    # Once deployed, they must update Cognito callback URLs with the CloudFront URL.
+    # Future: add a post-deploy verify command that does this automatically.
+    if [[ "${WEBUI_AUTH_ENABLED:-false}" == "true" ]]; then
+      info "After deploying the stack, update Cognito callback URL with your CloudFront domain."
+      info "Run: aws cognito-idp update-user-pool-client --user-pool-id ${WEBUI_COGNITO_POOL_ID} --client-id ${WEBUI_COGNITO_CLIENT_ID} --callback-urls '[\"https://<your-cf-domain>/auth/callback\",\"http://localhost:5476/auth/callback\"]' --region ${DEPLOY_REGION}"
+    fi
     _telem_install_completed 2>/dev/null || true
     exit 0
   fi
@@ -3575,6 +3576,31 @@ main() {
     *) fail "Invalid choice: $DEPLOY_METHOD" ;;
   esac
   _telem_deploy_completed 2>/dev/null || true
+
+  # Post-deploy: update Cognito callback URLs with the CloudFront/ALB URL
+  if [[ "${WEBUI_AUTH_ENABLED:-false}" == "true" && -n "${WEBUI_COGNITO_CLIENT_ID:-}" ]]; then
+    local cf_url=""
+    cf_url=$(aws cloudformation describe-stacks --stack-name "${ENV_NAME}" \
+      --region "$DEPLOY_REGION" --output json 2>/dev/null \
+      | jq -r '.Stacks[0].Outputs[] | select(.OutputKey=="CloudFrontURL" or .OutputKey=="DashboardURL" or .OutputKey=="WebUIURL") | .OutputValue' \
+      | head -1)
+    if [[ -n "$cf_url" && "$cf_url" != "null" ]]; then
+      # Normalize: strip trailing slash, add callback path
+      cf_url="${cf_url%/}"
+      local remote_callback="${cf_url}/auth/callback"
+      local remote_logout="${cf_url}/"
+      aws cognito-idp update-user-pool-client --user-pool-id "$WEBUI_COGNITO_POOL_ID" \
+        --client-id "$WEBUI_COGNITO_CLIENT_ID" \
+        --callback-urls "[\"${WEBUI_CALLBACK_URL}\",\"${remote_callback}\"]" \
+        --logout-urls "[\"${WEBUI_LOGOUT_URL}\",\"${remote_logout}\"]" \
+        --region "$DEPLOY_REGION" --output json >/dev/null 2>&1 \
+        && ok "Cognito callback URLs updated with ${cf_url}" \
+        || warn "Could not update Cognito callback URLs with CloudFront URL; update manually if needed."
+      # Also update SSM
+      local ssm_prefix="/lowkey/${ENV_NAME}/webui"
+      aws ssm put-parameter --name "${ssm_prefix}/callback-url" --value "${remote_callback}" --type String --overwrite --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
+    fi
+  fi
 
   wait_for_bootstrap   # step 6
   _telem_bootstrap_completed 2>/dev/null || true
