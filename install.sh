@@ -2114,9 +2114,7 @@ collect_config_simple() {
   local ts_suffix; ts_suffix=$(date +%s | tail -c 4)
   ENV_NAME="${PACK_NAME}-$((existing_count + 1))-${ts_suffix}"
   LOKI_WATERMARK="$ENV_NAME"
-  [[ "$PACK_NAME" == "kirocrew" ]] && configure_webui_auth "$PACK_NAME" 5476 "/auth/callback"
-
-  # Security: all on for builder/account_assistant, all off for personal_assistant
+  [[ "$PACK_NAME" == "kirocrew" ]] && WEBUI_AUTH_DEFERRED=true
   case "$PROFILE_NAME" in
     personal_assistant)
       SECURITY_HUB="false"; GUARDDUTY="false"; INSPECTOR="false"
@@ -2193,7 +2191,8 @@ configure_webui_auth() {
   client_json=$(aws cognito-idp create-user-pool-client --user-pool-id "$pool_id" \
     --client-name "${pack_name}-webui" --no-generate-secret \
     --explicit-auth-flows ALLOW_USER_SRP_AUTH ALLOW_REFRESH_TOKEN_AUTH \
-    --supported-identity-providers COGNITO --allowed-o-auth-flows code \
+    --supported-identity-providers COGNITO \
+    --allowed-o-auth-flows code --allowed-o-auth-flows-user-pool-client \
     --allowed-o-auth-scopes openid email --callback-urls "[\"${callback_url}\"]" \
     --logout-urls "[\"${logout_url}\"]" --prevent-user-existence-errors ENABLED \
     --token-validity-units '{"AccessToken":"hours","IdToken":"hours","RefreshToken":"days"}' \
@@ -2203,13 +2202,21 @@ configure_webui_auth() {
   client_id=$(echo "$client_json" | jq -r '.UserPoolClient.ClientId')
   [[ -z "$client_id" || "$client_id" == null ]] && fail "Cognito returned no app client ID."
 
-  suffix=$(python3 -c 'import secrets; print(secrets.token_hex(3))')
-  domain_prefix="lowkey-${pack_name}-${suffix}"
-  domain_json=$(aws cognito-idp create-user-pool-domain --user-pool-id "$pool_id" \
-    --domain "$domain_prefix" --region "$DEPLOY_REGION" --output json 2>/dev/null) \
-    || { suffix=$(python3 -c 'import secrets; print(secrets.token_hex(4))'); domain_prefix="lowkey-${pack_name}-${suffix}"; \
-      aws cognito-idp create-user-pool-domain --user-pool-id "$pool_id" --domain "$domain_prefix" --region "$DEPLOY_REGION" --output json >/dev/null 2>&1 \
-      || fail "Cognito hosted UI domain creation failed (including retry)."; }
+  # Check if pool already has a domain (existing pools); reuse if so
+  local existing_domain
+  existing_domain=$(aws cognito-idp describe-user-pool --user-pool-id "$pool_id" \
+    --region "$DEPLOY_REGION" --output json 2>/dev/null | jq -r '.UserPool.Domain // empty')
+  if [[ -n "$existing_domain" ]]; then
+    domain_prefix="$existing_domain"
+  else
+    suffix=$(python3 -c 'import secrets; print(secrets.token_hex(3))')
+    domain_prefix="lowkey-${pack_name}-${suffix}"
+    aws cognito-idp create-user-pool-domain --user-pool-id "$pool_id" \
+      --domain "$domain_prefix" --region "$DEPLOY_REGION" --output json >/dev/null 2>&1 \
+      || { suffix=$(python3 -c 'import secrets; print(secrets.token_hex(4))'); domain_prefix="lowkey-${pack_name}-${suffix}"; \
+        aws cognito-idp create-user-pool-domain --user-pool-id "$pool_id" --domain "$domain_prefix" --region "$DEPLOY_REGION" --output json >/dev/null 2>&1 \
+        || fail "Cognito hosted UI domain creation failed (including retry)."; }
+  fi
 
   if [[ -z "$user_email" ]]; then
     while true; do
@@ -2221,7 +2228,7 @@ configure_webui_auth() {
     fail "Invalid --webui-email value: ${user_email}"
   fi
   local password
-  password=$(python3 -c 'import secrets,string; print("".join(secrets.choice(string.ascii_letters+string.digits+"!@#$%&*") for _ in range(16)))')
+  password=$(python3 -c 'import secrets,string; u=secrets.choice(string.ascii_uppercase); l=secrets.choice(string.ascii_lowercase); d=secrets.choice(string.digits); s=secrets.choice("!@#$%&*"); r=[secrets.choice(string.ascii_letters+string.digits+"!@#$%&*") for _ in range(12)]; a=[u,l,d,s]+r; secrets.SystemRandom().shuffle(a); print("".join(a))')
   aws cognito-idp admin-create-user --user-pool-id "$pool_id" --username "$user_email" \
     --user-attributes "Name=email,Value=${user_email}" "Name=email_verified,Value=true" \
     --message-action SUPPRESS --region "$DEPLOY_REGION" --output json >/dev/null 2>&1 \
@@ -2270,7 +2277,7 @@ collect_config() {
 
   ENV_NAME="$default_env_name"
   LOKI_WATERMARK="$ENV_NAME"
-  [[ "$PACK_NAME" == "kirocrew" ]] && configure_webui_auth "$PACK_NAME" 5476 "/auth/callback"
+  [[ "$PACK_NAME" == "kirocrew" ]] && WEBUI_AUTH_DEFERRED=true
   ok "Environment: ${ENV_NAME}"
 
   # Adjust instance size default: profile takes precedence, pack registry as fallback
@@ -3442,6 +3449,21 @@ run_config_and_review() {
     run_config_and_review
     return
   }
+
+  # Deferred WebUI auth: create Cognito resources only after user confirms deployment
+  if [[ "${WEBUI_AUTH_DEFERRED:-false}" == true ]]; then
+    configure_webui_auth "$PACK_NAME" 5476 "/auth/callback"
+    # Write config to SSM so the instance can read it during bootstrap
+    if [[ "${WEBUI_AUTH_ENABLED:-false}" == "true" ]]; then
+      local ssm_prefix="/lowkey/${ENV_NAME}/webui"
+      aws ssm put-parameter --name "${ssm_prefix}/pool-id" --value "$WEBUI_COGNITO_POOL_ID" --type String --overwrite --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
+      aws ssm put-parameter --name "${ssm_prefix}/client-id" --value "$WEBUI_COGNITO_CLIENT_ID" --type String --overwrite --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
+      aws ssm put-parameter --name "${ssm_prefix}/domain" --value "$WEBUI_COGNITO_DOMAIN" --type String --overwrite --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
+      aws ssm put-parameter --name "${ssm_prefix}/region" --value "$WEBUI_COGNITO_REGION" --type String --overwrite --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
+      aws ssm put-parameter --name "${ssm_prefix}/callback-url" --value "$WEBUI_CALLBACK_URL" --type String --overwrite --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
+      ok "WebUI auth config written to SSM (${ssm_prefix}/*)"
+    fi
+  fi
 }
 
 main() {
