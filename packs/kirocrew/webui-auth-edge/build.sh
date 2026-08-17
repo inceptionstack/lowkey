@@ -35,8 +35,12 @@ if ! command -v "$NODE_BIN" >/dev/null 2>&1; then
 fi
 
 NODE_MAJOR=$("$NODE_BIN" -e 'console.log(process.versions.node.split(".")[0])')
-if [[ "$NODE_MAJOR" -lt 22 ]]; then
-  echo "build.sh: node 22+ required, got $NODE_MAJOR" >&2
+# Build-time Node just needs to run npm install and zip. The Lambda@Edge
+# RUNTIME is nodejs22.x, but that's about what Lambda executes — not about
+# what compiles the zip. Any Node >= 18 (LTS) is fine at build time.
+# CloudShell currently ships Node 20; requiring 22+ here breaks it.
+if [[ "$NODE_MAJOR" -lt 18 ]]; then
+  echo "build.sh: node 18+ required at build time (target runtime is nodejs22.x, but the zip only needs npm install), got $NODE_MAJOR" >&2
   exit 5
 fi
 

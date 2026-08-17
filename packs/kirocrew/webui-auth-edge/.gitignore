@@ -1,0 +1,4 @@
+# Never commit build artifacts
+node_modules/
+*.zip
+edge-lambda-*.zip

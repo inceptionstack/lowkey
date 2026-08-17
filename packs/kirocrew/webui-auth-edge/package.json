@@ -8,6 +8,6 @@
     "cognito-at-edge": "^1.5.2"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=18"
   }
 }
