@@ -372,6 +372,30 @@ Parameters:
     Description: "Email for the initial WebUI admin user. Required when EnableWebUIAuth is true."
     AllowedPattern: '^([^@]+@[^@]+\.[^@]+)?$'
 
+  EdgeLambdaVersionArn:
+    Type: String
+    Default: ''
+    Description: "Versioned ARN of the Lambda@Edge function (produced by the companion edge-stack in us-east-1). Required when EnableWebUIAuth is true."
+
+  EdgeConfigSecretName:
+    Type: String
+    Default: ''
+    Description: "Name of the us-east-1 Secrets Manager secret holding the merged Cognito config for the Lambda@Edge. Required when EnableWebUIAuth is true."
+
+  EdgeConfigSecretArn:
+    Type: String
+    Default: ''
+    Description: "Full ARN of the us-east-1 edge config secret. Required when EnableWebUIAuth is true."
+
+  SigningKeySecretName:
+    Type: String
+    Default: ''
+    Description: "Name of the us-east-1 Secrets Manager secret holding the raw signing key. Required when EnableWebUIAuth is true."
+
+  SigningKeySecretArn:
+    Type: String
+    Default: ''
+    Description: "Full ARN of the us-east-1 signing key secret. Required when EnableWebUIAuth is true."
 # ============================================================================
 # RULES
 # ============================================================================
@@ -401,6 +425,20 @@ Rules:
     Assertions:
       - Assert: !Not [!Equals [!Ref WebUIAdminEmail, '']]
         AssertDescription: "WebUIAdminEmail is required when EnableWebUIAuth is true."
+
+  WebUIEdgeRequiresParams:
+    RuleCondition: !Equals [!Ref EnableWebUIAuth, 'true']
+    Assertions:
+      - Assert: !Not [!Equals [!Ref EdgeLambdaVersionArn, '']]
+        AssertDescription: "EdgeLambdaVersionArn is required when EnableWebUIAuth is true (installer deploys the companion edge stack in us-east-1 first and passes its outputs to this stack)."
+      - Assert: !Not [!Equals [!Ref EdgeConfigSecretName, '']]
+        AssertDescription: "EdgeConfigSecretName is required when EnableWebUIAuth is true (from the edge stack outputs)."
+      - Assert: !Not [!Equals [!Ref EdgeConfigSecretArn, '']]
+        AssertDescription: "EdgeConfigSecretArn is required when EnableWebUIAuth is true (from the edge stack outputs)."
+      - Assert: !Not [!Equals [!Ref SigningKeySecretName, '']]
+        AssertDescription: "SigningKeySecretName is required when EnableWebUIAuth is true (from the edge stack outputs)."
+      - Assert: !Not [!Equals [!Ref SigningKeySecretArn, '']]
+        AssertDescription: "SigningKeySecretArn is required when EnableWebUIAuth is true (from the edge stack outputs)."
 
 # ============================================================================
 # CONDITIONS
@@ -627,6 +665,25 @@ Resources:
       Port: 80
       Protocol: HTTP
       DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            ContentType: text/plain
+            MessageBody: Forbidden
+            StatusCode: '403'
+
+  KiroCrewOriginVerifyListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Condition: IsKiroCrew
+    Properties:
+      ListenerArn: !Ref KiroCrewHTTPListener
+      Priority: 1
+      Conditions:
+        - Field: http-header
+          HttpHeaderConfig:
+            HttpHeaderName: x-origin-verify
+            Values:
+              - !Sub '{{resolve:secretsmanager:${KiroCrewOriginVerifySecret}}}'
+      Actions:
         - Type: forward
           TargetGroupArn: !Ref KiroCrewTargetGroup
 
@@ -672,6 +729,12 @@ Resources:
             - DELETE
           CachePolicyId: '4135ea2d-6df8-44a3-9df3-4b5a84be39ad'  # CachingDisabled
           OriginRequestPolicyId: '216adef6-5c7f-47e4-b989-5492eafa07d3'  # AllViewer
+          LambdaFunctionAssociations: !If
+            - EnableWebUI
+            - - EventType: viewer-request
+                LambdaFunctionARN: !Ref EdgeLambdaVersionArn
+                IncludeBody: false
+            - !Ref 'AWS::NoValue'
         Origins:
           - Id: kirocrew-alb-origin
             DomainName: !GetAtt KiroCrewALB.DNSName
@@ -1471,6 +1534,7 @@ Resources:
         - !Sub 'https://${KiroCrewDistribution.DomainName}/auth/callback'
         - 'http://localhost:5476/auth/callback'
       LogoutURLs:
+        - !Sub 'https://${KiroCrewDistribution.DomainName}/logout'
         - !Sub 'https://${KiroCrewDistribution.DomainName}/'
         - 'http://localhost:5476/'
       PreventUserExistenceErrors: ENABLED
@@ -1526,7 +1590,13 @@ Resources:
                 Action:
                   - secretsmanager:PutSecretValue
                   - secretsmanager:UpdateSecret
-                Resource: !Ref WebUIAdminSecret
+                Resource:
+                  - !Ref WebUIAdminSecret
+                  - !Ref EdgeConfigSecretArn
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref SigningKeySecretArn
 
   WebUIUserCreationFunction:
     Type: AWS::Lambda::Function
@@ -1572,10 +1642,22 @@ Resources:
               secrets.SystemRandom().shuffle(pwd)
               return ''.join(pwd)
 
-          def write_secret(sm, secret_arn, email, password):
+          def write_admin_secret(sm, secret_arn, email, password):
               sm.put_secret_value(
                   SecretId=secret_arn,
                   SecretString=json.dumps({'email': email, 'password': password})
+              )
+
+          def write_edge_config(sm, secret_arn, pool_id, client_id, cognito_domain, signing_key, cognito_region):
+              sm.put_secret_value(
+                  SecretId=secret_arn,
+                  SecretString=json.dumps({
+                      'poolId': pool_id,
+                      'clientId': client_id,
+                      'cognitoDomain': cognito_domain,
+                      'signingKey': signing_key,
+                      'cognitoRegion': cognito_region,
+                  })
               )
 
           def create_or_reset_user(cognito, pool_id, email, password):
@@ -1590,8 +1672,8 @@ Resources:
                       MessageAction='SUPPRESS'
                   )
               except cognito.exceptions.UsernameExistsException:
-                  # User exists (e.g. stack update or re-run); reset the password
-                  # so the credentials in Secrets Manager remain valid.
+                  # User exists (stack update or re-run); reset password so the credentials
+                  # in Secrets Manager remain authoritative.
                   pass
               cognito.admin_set_user_password(
                   UserPoolId=pool_id,
@@ -1611,48 +1693,69 @@ Resources:
                   print(f'[WARN] Could not delete old user {email}: {e}')
 
           def handler(event, context):
-              # Log event WITHOUT ResourceProperties (which may contain email)
+              # Never log ResourceProperties (contains email + secret ARNs)
               print(f"[INFO] RequestType={event.get('RequestType')} LogicalId={event.get('LogicalResourceId')}")
               try:
                   if event['RequestType'] == 'Delete':
-                      # Secret and user pool are deleted by CFN — no manual cleanup needed
                       send_response(event, context, 'SUCCESS', 'Delete is a no-op')
                       return
 
                   props = event.get('ResourceProperties', {})
                   old_props = event.get('OldResourceProperties', {})
                   pool_id = props.get('UserPoolId', '')
+                  client_id = props.get('ClientId', '')
+                  cognito_domain = props.get('CognitoDomain', '')
                   email = props.get('AdminEmail', '')
-                  secret_arn = os.environ.get('SECRET_ARN', '')
+                  admin_secret_arn = props.get('AdminSecretArn', '')
+                  edge_config_secret_name = props.get('EdgeConfigSecretName', '')
+                  edge_config_secret_arn = props.get('EdgeConfigSecretArn', '')
+                  signing_key_secret_name = props.get('SigningKeySecretName', '')
+                  signing_key_secret_arn = props.get('SigningKeySecretArn', '')
+                  edge_region = props.get('EdgeRegion', 'us-east-1')
                   region = props.get('Region', os.environ.get('AWS_REGION', 'us-east-1'))
 
-                  if not pool_id or not email or not secret_arn:
-                      send_response(event, context, 'FAILED',
-                          'Missing UserPoolId, AdminEmail, or SECRET_ARN env')
+                  missing = [k for k, v in {
+                      'UserPoolId': pool_id,
+                      'ClientId': client_id,
+                      'CognitoDomain': cognito_domain,
+                      'AdminEmail': email,
+                      'AdminSecretArn': admin_secret_arn,
+                      'EdgeConfigSecretName': edge_config_secret_name,
+                      'SigningKeySecretName': signing_key_secret_name,
+                  }.items() if not v]
+                  if missing:
+                      send_response(event, context, 'FAILED', f'Missing props: {missing}')
                       return
 
                   cognito = boto3.client('cognito-idp', region_name=region)
-                  sm = boto3.client('secretsmanager', region_name=region)
+                  sm_local = boto3.client('secretsmanager', region_name=region)
+                  sm_edge = boto3.client('secretsmanager', region_name=edge_region)
 
-                  # On Update, if email changed, delete the old user first
+                  # On Update, delete the old admin user if email changed
                   if event['RequestType'] == 'Update':
                       old_email = old_props.get('AdminEmail', '')
                       if old_email and old_email != email:
                           delete_user_safely(cognito, pool_id, old_email)
 
+                  # 1) Provision the admin user in Cognito and store credentials
+                  # in the local (main-stack region) admin secret.
                   password = generate_password()
                   create_or_reset_user(cognito, pool_id, email, password)
-                  write_secret(sm, secret_arn, email, password)
+                  write_admin_secret(sm_local, admin_secret_arn, email, password)
 
-                  # Return only non-sensitive data; password is in Secrets Manager
-                  send_response(event, context, 'SUCCESS', 'Admin user provisioned',
-                      {'Email': email, 'SecretArn': secret_arn})
+                  # 2) Read the CFN-generated signing key from us-east-1 (edge stack)
+                  # and write the merged edge config to us-east-1 (edge stack).
+                  # Both live in us-east-1 because the Lambda@Edge reads them there.
+                  sk_resp = sm_edge.get_secret_value(SecretId=signing_key_secret_name)
+                  signing_key = json.loads(sk_resp['SecretString'])['key']
+                  write_edge_config(sm_edge, edge_config_secret_name, pool_id, client_id, cognito_domain, signing_key, region)
+
+                  send_response(event, context, 'SUCCESS', 'Admin user + edge config provisioned',
+                      {'Email': email})
               except Exception as e:
-                  # Never log the password; only the exception class + short message
                   err = f'{type(e).__name__}: {str(e)[:180]}'
                   print(f'[ERROR] {err}')
                   send_response(event, context, 'FAILED', err)
-
   WebUIUserCreationResource:
     Type: Custom::WebUIUserCreation
     Condition: EnableWebUI
@@ -1662,9 +1765,27 @@ Resources:
     Properties:
       ServiceToken: !GetAtt WebUIUserCreationFunction.Arn
       UserPoolId: !Ref WebUIUserPool
+      ClientId: !Ref WebUIUserPoolClient
+      CognitoDomain: !Sub '${WebUIUserPoolDomain}.auth.${AWS::Region}.amazoncognito.com'
       AdminEmail: !Ref WebUIAdminEmail
+      AdminSecretArn: !Ref WebUIAdminSecret
+      EdgeConfigSecretName: !Ref EdgeConfigSecretName
+      EdgeConfigSecretArn: !Ref EdgeConfigSecretArn
+      SigningKeySecretName: !Ref SigningKeySecretName
+      SigningKeySecretArn: !Ref SigningKeySecretArn
+      EdgeRegion: 'us-east-1'
       Region: !Ref 'AWS::Region'
 
+  # --------------------------------------------------------------------------
+  # WebUI Lambda@Edge (Cognito enforcement on CloudFront)
+  # --------------------------------------------------------------------------
+  # Two secrets:
+  # - SigningKeySecret: raw HMAC key, CFN-managed via GenerateSecretString.
+  #   Never rewritten by the Custom Resource. Read once by the Custom Resource
+  #   to merge into EdgeConfigSecret.
+  # - EdgeConfigSecret: the merged config {poolId, clientId, cognitoDomain,
+  #   signingKey} that the Lambda@Edge reads at cold start. Populated by the
+  #   Custom Resource after Cognito resources are created.
   # SSM Session Manager Preferences (auto-login as ec2-user with welcome)
   # --------------------------------------------------------------------------
   # --------------------------------------------------------------------------
@@ -1882,4 +2003,14 @@ Outputs:
     Condition: EnableWebUI
     Description: ARN of Secrets Manager secret holding initial WebUI admin credentials (email + password). Rotate/delete after first use.
     Value: !Ref WebUIAdminSecret
+
+  WebUIEdgeFunctionArn:
+    Condition: EnableWebUI
+    Description: Lambda@Edge function version ARN attached to the CloudFront distribution (viewer-request)
+    Value: !Ref EdgeLambdaVersionArn
+
+  WebUIEdgeSigningKeySecretArn:
+    Condition: EnableWebUI
+    Description: ARN of Secrets Manager secret holding the Lambda@Edge nonce/state signing key
+    Value: !Ref SigningKeySecretArn
 

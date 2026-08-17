@@ -2155,6 +2155,117 @@ configure_webui_auth() {
   info "Initial password will be shown after stack deploys."
 }
 
+# ============================================================================
+# WebUI Lambda@Edge zip build + S3 upload (KiroCrew, when auth enabled)
+# ============================================================================
+# Builds the Cognito-at-Edge zip, uploads it to a dedicated us-east-1 bucket,
+# and exports the edge artifact details for deploy_edge_stack.
+build_and_upload_edge_lambda() {
+  [[ "${WEBUI_AUTH_ENABLED:-false}" == "true" ]] || return 0
+  [[ "$PACK_NAME" == "kirocrew" ]] || return 0
+
+  # Preflight: required tools for the edge Lambda build path.
+  require_cmd node "node (22+) is required to build the Cognito Lambda@Edge zip. Install Node 22+ or disable WebUI auth."
+  require_cmd npm "npm is required to build the Cognito Lambda@Edge zip."
+  require_cmd zip "zip is required to package the Cognito Lambda@Edge deployment."
+  require_cmd openssl "openssl is required to compute the Lambda@Edge zip SHA256 for CFN."
+
+  local build_script="${CLONE_DIR}/packs/kirocrew/webui-auth-edge/build.sh"
+  # In debug-in-repo mode CLONE_DIR points into the working repo; otherwise it
+  # points at the freshly-cloned copy. In either case the script must exist
+  # AFTER prepare_repo has run. This function is called from that point.
+  if [[ ! -x "$build_script" ]]; then
+    fail "Edge Lambda build script missing: $build_script"
+  fi
+
+  step "WebUI Lambda@Edge"
+  info "Building Cognito Lambda@Edge zip..."
+
+  # Deterministic config secret NAME (not ARN — Secrets Manager appends a random suffix
+  # to the ARN we can't know at build time, but names are stable). The Lambda@Edge
+  # bakes this name in and fetches the merged config at cold start.
+  local secret_name="/lowkey/${ENV_NAME}/webui-edge-config"
+
+  local zip_path
+  zip_path=$(CONFIG_SECRET_NAME="$secret_name" "$build_script" 2>&1 | tail -1) \
+    || fail "Edge Lambda build failed: $zip_path"
+  if [[ ! -f "$zip_path" ]]; then
+    fail "Edge Lambda build script did not produce a zip: $zip_path"
+  fi
+
+  local bucket="${ENV_NAME}-edge-${ACCOUNT_ID}"
+  local key="edge/$(basename "$zip_path")"
+
+  # Lambda@Edge requires its source bucket to be in us-east-1. Ensure the
+  # dedicated bucket exists (idempotent), independently of the main-region
+  # CloudFormation templates bucket.
+  if ! aws s3api head-bucket --bucket "$bucket" --region us-east-1 2>/dev/null; then
+    info "Creating edge Lambda bucket: $bucket"
+    aws s3api create-bucket --bucket "$bucket" --region us-east-1 \
+      >/dev/null 2>&1 || fail "Failed to create bucket $bucket"
+  fi
+  aws s3api put-bucket-encryption --bucket "$bucket" \
+    --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"},"BucketKeyEnabled":true}]}' \
+    --region us-east-1 >/dev/null 2>&1 || true
+  aws s3api put-bucket-versioning --bucket "$bucket" --versioning-configuration Status=Enabled \
+    --region us-east-1 >/dev/null 2>&1 || fail "Failed to enable versioning on $bucket"
+  aws s3api put-public-access-block --bucket "$bucket" --region us-east-1 \
+    --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true \
+    >/dev/null 2>&1 || fail "Failed to block public access on $bucket"
+
+  info "Uploading edge Lambda zip: s3://${bucket}/${key} ($(wc -c < "$zip_path") bytes)"
+  aws s3 cp "$zip_path" "s3://${bucket}/${key}" --region us-east-1 >/dev/null \
+    || fail "Failed to upload edge Lambda zip"
+
+  # Compute base64-encoded SHA256 of the zip. CFN needs this on the
+  # AWS::Lambda::Version resource so a new version is published whenever
+  # the code changes; without it, CloudFront keeps pointing at the old
+  # version even though $LATEST has new code.
+  local code_sha256
+  code_sha256=$(openssl dgst -sha256 -binary "$zip_path" | openssl base64 -A) \
+    || fail "Failed to compute SHA256 of edge Lambda zip"
+
+  export EDGE_S3_BUCKET_US_EAST_1="$bucket"
+  export EDGE_S3_KEY="$key"
+  export EDGE_CODE_SHA256="$code_sha256"
+  ok "Edge Lambda uploaded"
+}
+
+deploy_edge_stack() {
+  [[ "${WEBUI_AUTH_ENABLED:-false}" == "true" ]] || return 0
+  [[ "$PACK_NAME" == "kirocrew" ]] || return 0
+
+  local edge_stack_name="${ENV_NAME}-edge-stack"
+  step "Deploy WebUI Lambda@Edge companion stack"
+  if ! aws cloudformation deploy \
+    --template-file "${CLONE_DIR}/deploy/cloudformation/edge-stack.yaml" \
+    --stack-name "$edge_stack_name" \
+    --region us-east-1 \
+    --capabilities CAPABILITY_NAMED_IAM \
+    --parameter-overrides \
+      "EnvironmentName=${ENV_NAME}" "PackName=${PACK_NAME}" \
+      "EdgeLambdaS3Bucket=${EDGE_S3_BUCKET_US_EAST_1}" \
+      "EdgeLambdaS3Key=${EDGE_S3_KEY}" "EdgeLambdaCodeSha256=${EDGE_CODE_SHA256}"; then
+    fail "Lambda@Edge companion stack deployment failed; main stack was not started"
+  fi
+
+  local outputs
+  outputs=$(aws cloudformation describe-stacks --stack-name "$edge_stack_name" --region us-east-1 \
+    --query 'Stacks[0].Outputs' --output json) \
+    || fail "Could not read outputs from Lambda@Edge companion stack"
+  EDGE_LAMBDA_VERSION_ARN=$(printf '%s' "$outputs" | jq -r '.[] | select(.OutputKey=="EdgeLambdaVersionArn") | .OutputValue')
+  EDGE_CONFIG_SECRET_NAME=$(printf '%s' "$outputs" | jq -r '.[] | select(.OutputKey=="EdgeConfigSecretName") | .OutputValue')
+  EDGE_CONFIG_SECRET_ARN=$(printf '%s' "$outputs" | jq -r '.[] | select(.OutputKey=="EdgeConfigSecretArn") | .OutputValue')
+  SIGNING_KEY_SECRET_NAME=$(printf '%s' "$outputs" | jq -r '.[] | select(.OutputKey=="SigningKeySecretName") | .OutputValue')
+  SIGNING_KEY_SECRET_ARN=$(printf '%s' "$outputs" | jq -r '.[] | select(.OutputKey=="SigningKeySecretArn") | .OutputValue')
+  export EDGE_LAMBDA_VERSION_ARN EDGE_CONFIG_SECRET_NAME EDGE_CONFIG_SECRET_ARN
+  export SIGNING_KEY_SECRET_NAME SIGNING_KEY_SECRET_ARN
+  [[ -n "$EDGE_LAMBDA_VERSION_ARN" && "$EDGE_LAMBDA_VERSION_ARN" != null ]] \
+    || fail "Lambda@Edge companion stack returned no version ARN"
+  ok "Lambda@Edge companion stack deployed"
+}
+
+
 collect_config() {
   step "Configuration"
 
@@ -2288,7 +2399,7 @@ collect_security_config() {
 # Parameter source-of-truth: single mapping for CFN Console and CFN CLI
 # ============================================================================
 # ⚠ KEEP THESE TWO ARRAYS IN SYNC — same order, same count
-PARAM_CFN_NAMES=(EnvironmentName PackName ProfileName InstanceType DefaultModel ModelMode BedrockRegion LokiWatermark EnableBedrockForm EnableSecurityHub EnableGuardDuty EnableInspector EnableAccessAnalyzer EnableConfigRecorder ExistingVpcId ExistingSubnetId ExistingSubnetId2 RepoBranch KiroFromSecret TelegramBotTokenSecret TelegramUser Primary DailyDriver CodexModel EnableWebUIAuth WebUIAdminEmail)
+PARAM_CFN_NAMES=(EnvironmentName PackName ProfileName InstanceType DefaultModel ModelMode BedrockRegion LokiWatermark EnableBedrockForm EnableSecurityHub EnableGuardDuty EnableInspector EnableAccessAnalyzer EnableConfigRecorder ExistingVpcId ExistingSubnetId ExistingSubnetId2 RepoBranch KiroFromSecret TelegramBotTokenSecret TelegramUser Primary DailyDriver CodexModel EnableWebUIAuth WebUIAdminEmail EdgeLambdaVersionArn EdgeConfigSecretName EdgeConfigSecretArn SigningKeySecretName SigningKeySecretArn)
 PARAM_VALUES=()  # populated by build_deploy_params()
 
 # Per-pack default model (passed to CFN DefaultModel / bootstrap.sh --model).
@@ -2350,6 +2461,11 @@ build_deploy_params() {
     "${TROIKA_CODEX_MODEL:-openai.gpt-5.5}"
     "${WEBUI_AUTH_ENABLED:-false}"
     "${WEBUI_ADMIN_EMAIL:-}"
+    "${EDGE_LAMBDA_VERSION_ARN:-}"
+    "${EDGE_CONFIG_SECRET_NAME:-}"
+    "${EDGE_CONFIG_SECRET_ARN:-}"
+    "${SIGNING_KEY_SECRET_NAME:-}"
+    "${SIGNING_KEY_SECRET_ARN:-}"
   )
   # Validate parallel arrays are in sync
   [[ ${#PARAM_CFN_NAMES[@]} -eq ${#PARAM_VALUES[@]} ]] \
@@ -2373,6 +2489,16 @@ format_cfn_cli_params() {
   for i in "${!PARAM_CFN_NAMES[@]}"; do
     [[ -n "$params" ]] && params+=" "
     params+="ParameterKey=${PARAM_CFN_NAMES[$i]},ParameterValue=${PARAM_VALUES[$i]}"
+  done
+  echo "$params"
+}
+
+# Format params for CFN deploy --parameter-overrides (Key=Value)
+format_cfn_deploy_params() {
+  local params=""
+  for i in "${!PARAM_CFN_NAMES[@]}"; do
+    [[ -n "$params" ]] && params+=" "
+    params+="${PARAM_CFN_NAMES[$i]}=${PARAM_VALUES[$i]}"
   done
   echo "$params"
 }
@@ -2567,23 +2693,21 @@ deploy_cfn_stack() {
   aws s3 cp "$template" "s3://${bucket}/lowkey/template.yaml" --region "$DEPLOY_REGION" >/dev/null \
     || fail "Failed to upload template to S3"
 
-  # Pre-signed URL (bucket blocks public access)
-  local s3_url
-  s3_url=$(aws s3 presign "s3://${bucket}/lowkey/template.yaml" \
-    --expires-in 3600 --region "$DEPLOY_REGION") \
-    || fail "Could not generate pre-signed URL for template"
-
+  # aws cloudformation deploy is idempotent: it creates a missing stack and
+  # updates an existing one. --no-fail-on-empty-changeset makes reruns safe.
   # shellcheck disable=SC2046
-  aws cloudformation create-stack \
+  aws cloudformation deploy \
     --stack-name "$STACK_NAME" \
-    --template-url "$s3_url" \
+    --template-file "$template" \
+    --s3-bucket "$bucket" \
+    --s3-prefix lowkey/deploy \
     --region "$DEPLOY_REGION" \
     --capabilities $capabilities \
-    --parameters $(format_cfn_cli_params) \
-    --output text --query 'StackId'
+    --parameter-overrides $(format_cfn_deploy_params) \
+    --no-fail-on-empty-changeset \
+    || fail "CloudFormation deployment failed"
 
-  info "Stack creating... this takes ~8-10 minutes"
-  wait_for_cfn_stack
+  info "Stack deployment complete"
 
   INSTANCE_ID=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$DEPLOY_REGION" \
     --query 'Stacks[0].Outputs[?OutputKey==`InstanceId`].OutputValue' --output text)
@@ -3450,15 +3574,16 @@ main() {
 
   # Console deploy exits early (no clone, no bootstrap wait)
   if [[ "$DEPLOY_METHOD" == "$DEPLOY_CFN_CONSOLE" ]]; then
+    # P1 #5: Console mode can't build+upload the edge Lambda zip (no local
+    # clone, no shell access post-flow). WebUI auth requires CLI deploy.
+    if [[ "${WEBUI_AUTH_ENABLED:-false}" == "true" ]]; then
+      fail "WebUI authentication is not supported with the CloudFormation Console deploy method. Re-run and choose 'CloudFormation CLI' when prompted, or disable WebUI auth."
+    fi
     TOTAL_STEPS=5
     _TELEM_CURRENT_STEP="deploy_console"
     _telem_deploy_started 2>/dev/null || true
     step "Deploy (Console)"
     deploy_console
-    if [[ "${WEBUI_AUTH_ENABLED:-false}" == "true" ]]; then
-      info "After deploying the stack, retrieve the initial admin password from stack outputs:"
-      info "  aws cloudformation describe-stacks --stack-name <name> --region ${DEPLOY_REGION} --query 'Stacks[0].Outputs' --output table"
-    fi
     _telem_install_completed 2>/dev/null || true
     exit 0
   fi
@@ -3469,6 +3594,14 @@ main() {
   step "Deploy"
   prepare_repo
   echo ""
+
+  if [[ "${WEBUI_AUTH_ENABLED:-false}" == "true" && "$PACK_NAME" == "kirocrew" ]]; then
+    build_and_upload_edge_lambda
+    deploy_edge_stack
+    # Edge outputs are required by the main stack parameters; refresh the
+    # parallel parameter values after the companion stack completes.
+    build_deploy_params
+  fi
 
   case "$DEPLOY_METHOD" in
     "$DEPLOY_CFN_CLI") info "Deploying with CloudFormation..."
@@ -3509,6 +3642,10 @@ main() {
           "  Pool:      ${pool_id}" \
           "  Client:    ${client_id}" \
           "  Domain:    ${domain}" \
+          "" \
+          "  Edge Lambda: ${EDGE_LAMBDA_VERSION_ARN}" \
+          "  Edge Region: us-east-1" \
+          "  Edge Stack:  ${ENV_NAME}-edge-stack" \
           "" \
           "  Secret:    ${secret_arn}" || true
         echo ""

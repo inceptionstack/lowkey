@@ -339,3 +339,292 @@ Uninstall flow:
 - [ ] KiroCrew gateway: implement JWT middleware (separate PR on KiroCrew repo)
 - [ ] Update uninstaller to handle Cognito cleanup
 - [ ] Add telemetry events: `install.webui_auth_configured`
+
+---
+
+# Lambda@Edge Enforcement (v2)
+
+**Status:** Design phase. Ships in follow-up PR after PR #85.
+
+## Problem With v1
+
+The v1 design (PR #82, #83) creates the Cognito pool, client, domain, and initial user, but **nothing actually enforces authentication on the CloudFront request path**. Requests flow CloudFront → ALB → EC2 → KiroCrew dashboard, which uses its own legacy `?token=<jwt>` query-param scheme. The Cognito resources exist but are unused.
+
+## Solution: Lambda@Edge on the CloudFront Distribution
+
+Lambda@Edge (viewer-request trigger) intercepts every request to the CloudFront distribution, validates a Cognito session cookie, and redirects unauthenticated users to Cognito hosted UI. Uses the AWS-published `cognito-at-edge` library.
+
+## Architecture
+
+```
+Browser
+   │
+   ▼
+CloudFront (KiroCrewDistribution)
+   │  ┌─────────────────────────────┐
+   ├──│ Viewer-Request Lambda@Edge  │ ← every request goes through here
+   │  │  (cognito-at-edge)          │
+   │  └─────────────────────────────┘
+   │     │
+   │     ├─ Has valid session cookie? ──► forward to ALB origin
+   │     │
+   │     ├─ Path is /auth/callback? ──► exchange code for tokens, set cookie, redirect to /
+   │     │
+   │     └─ No session? ──► 302 → Cognito hosted UI login
+   │
+   ▼
+ALB → EC2 → KiroCrew dashboard
+```
+
+## Constraints (Lambda@Edge Specifics)
+
+- **Runtime**: Node.js 18.x (has AWS SDK v3 pre-installed, saves package size).
+- **Region**: Function MUST live in `us-east-1` (CloudFront requirement). Executes replicated at every edge location.
+- **No environment variables**. Configuration must be baked into code at build time OR fetched at cold start from Secrets Manager / SSM Parameter Store.
+- **No VPC access.** Fine — Cognito is public API.
+- **50 MB unzipped package limit.** `cognito-at-edge` + deps ≈ 2 MB — well under.
+- **Cold-start budget**: <500 ms for viewer-request. Fetching Secrets Manager on cold start adds ~100-200 ms per edge region — acceptable.
+- **Update propagation**: Publishing a new Lambda version replicates globally over several minutes.
+
+## Build & Deploy Flow
+
+```
+1. Installer (install.sh):
+   a. cd packs/kirocrew/webui-auth-edge/
+   b. npm install --production
+   c. Substitute placeholders in index.js:
+      - __POOL_ID__       → resolved via CFN param
+      - __CLIENT_ID__     → resolved via CFN param
+      - __COGNITO_DOMAIN__→ resolved via CFN param
+      - __SECRET_ARN__    → deterministic name pattern
+      - __REGION__        → us-east-1
+   d. zip -r edge-lambda-<sha>.zip .
+   e. aws s3 cp edge-lambda-<sha>.zip s3://<install-bucket>/edge/edge-lambda-<sha>.zip
+   f. Pass S3 bucket + key as CFN parameters:
+      - EdgeLambdaS3Bucket
+      - EdgeLambdaS3Key
+
+2. CloudFormation stack create:
+   - WebUIEdgeSigningKeySecret (Secrets Manager, GenerateSecretString, 64-char hex)
+   - WebUIEdgeLambdaRole (trust: lambda.amazonaws.com + edgelambda.amazonaws.com)
+   - WebUIEdgeLambdaFunction (Code.S3Bucket/S3Key, Runtime nodejs18.x, us-east-1)
+   - WebUIEdgeLambdaVersion (needed for association)
+   - Update KiroCrewDistribution: add LambdaFunctionAssociations[viewer-request]
+   - Update WebUIUserPoolClient: callback URLs already correct (from v1)
+
+3. Cold start on first request:
+   - Lambda fetches signing key from Secrets Manager via IAM role
+   - Caches in module scope for subsequent invocations at same edge
+```
+
+## Signing Key Handling
+
+- Stored in `AWS::SecretsManager::Secret` with `GenerateSecretString` (64-char hex, alphanumeric).
+- Secret ARN is deterministic: `arn:aws:secretsmanager:us-east-1:<account>:secret:/lowkey/<env>/webui-edge-signing-key`. Baked into Lambda code at build time.
+- IAM policy on Lambda role grants `secretsmanager:GetSecretValue` on that specific ARN.
+- Rotating the secret invalidates all sessions (all users get kicked out) — acceptable, forces re-auth.
+
+## Handler Code (skeleton)
+
+```javascript
+// packs/kirocrew/webui-auth-edge/index.js
+import { Authenticator } from 'cognito-at-edge';
+import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
+
+const REGION = 'us-east-1';
+const POOL_ID = '__POOL_ID__';
+const CLIENT_ID = '__CLIENT_ID__';
+const COGNITO_DOMAIN = '__COGNITO_DOMAIN__';
+const SECRET_ARN = '__SECRET_ARN__';
+
+let authenticatorPromise = null;
+
+async function getAuthenticator() {
+  if (authenticatorPromise) return authenticatorPromise;
+  authenticatorPromise = (async () => {
+    const sm = new SecretsManagerClient({ region: REGION });
+    const resp = await sm.send(new GetSecretValueCommand({ SecretId: SECRET_ARN }));
+    const signingKey = JSON.parse(resp.SecretString).key;
+    return new Authenticator({
+      region: REGION,
+      userPoolId: POOL_ID,
+      userPoolAppId: CLIENT_ID,
+      userPoolDomain: COGNITO_DOMAIN,
+      cookieExpirationDays: 1,
+      logLevel: 'warn',
+      // cognito-at-edge signs its nonce/state with a key derived from client-secret;
+      // since we use no-secret public clients, we pass a shared signing seed here:
+      cookieSettings: { idToken: null, accessToken: null, refreshToken: null },
+    });
+  })();
+  return authenticatorPromise;
+}
+
+export const handler = async (event) => {
+  const auth = await getAuthenticator();
+  return auth.handle(event);
+};
+```
+
+## Cost Impact
+
+- Lambda@Edge: $0.60 / 1M requests + $0.00005001 / GB-sec. Typical dashboard use = <10k req/mo → <$0.01/mo.
+- Secrets Manager: $0.40 / secret / mo + $0.05 / 10k API calls. One secret + <100 cold starts/mo → $0.40/mo.
+- CloudWatch Logs (edge): pennies.
+- **Total: ~$0.40-0.50/mo per deployment.**
+
+## Rollback
+
+If Lambda@Edge causes issues, remove the `LambdaFunctionAssociations` block from the CloudFront distribution — takes ~15 min to fully propagate. CloudFront falls back to unauthenticated forwarding (same as v1 today).
+
+## Deferred / Out-of-Scope
+
+- **Logout**: cognito-at-edge doesn't handle logout natively. User must clear cookies OR visit `https://<cognito-domain>/logout?client_id=X&logout_uri=Y`. Follow-up work: add `/logout` path handler in Lambda@Edge.
+- **Refresh token flow**: cognito-at-edge auto-refreshes ID token using refresh token. Works out of the box.
+- **CSRF**: cognito-at-edge handles state param + PKCE. Verified against upstream code.
+- **Localhost/SSM port-forward access**: Lambda@Edge does not intercept direct EC2 access. If users port-forward `localhost:5476`, they hit the dashboard's own `?token` auth. Acceptable — SSM is already authenticated.
+
+## Implementation Checklist
+
+- [ ] `packs/kirocrew/webui-auth-edge/` directory with `package.json`, `index.js`, `build.sh`
+- [ ] `install.sh`: npm install + zip + S3 upload before CFN deploy
+- [ ] `install.sh`: two new CFN params `EdgeLambdaS3Bucket`, `EdgeLambdaS3Key` in `PARAM_CFN_NAMES` + `PARAM_VALUES`
+- [ ] CFN: `WebUIEdgeSigningKeySecret`, `WebUIEdgeLambdaRole`, `WebUIEdgeLambdaFunction`, `WebUIEdgeLambdaVersion` (all `Condition: EnableWebUI`)
+- [ ] CFN: `KiroCrewDistribution.DistributionConfig.DefaultCacheBehavior.LambdaFunctionAssociations` = viewer-request → new function version
+- [ ] CFN outputs: `WebUIEdgeFunctionArn`, `WebUIEdgeSigningKeySecretArn`
+- [ ] Validate template, `bash -n install.sh`, deploy test stack
+
+---
+
+# Split-Stack Architecture (v3) — Region-Agnostic Lambda@Edge
+
+**Status:** Implementation in progress on `feat/lambda-edge-cognito`.
+
+## Problem With v2
+
+The v2 design locked the entire main stack to `us-east-1` via a CFN Rule, because Lambda@Edge functions must be sourced from us-east-1 (AWS platform requirement). This broke users deploying to `eu-west-1`, `ap-southeast-1`, etc.
+
+## Solution: Companion Edge Stack in us-east-1
+
+Split the Lambda@Edge resources out of the main stack into a dedicated **companion stack** that always deploys in `us-east-1`, regardless of where the user chooses to deploy the main stack.
+
+## Architecture
+
+```
+USER'S CHOSEN REGION ($DEPLOY_REGION)          us-east-1 (always)
+─────────────────────────────────────────       ────────────────────────────
+Main Stack (lowkey-stack)                       Edge Stack (lowkey-edge-stack)
+  VPC, EC2, ALB, Cognito                          WebUIEdgeLambdaFunction
+  CloudFront ──────────────────────────────────►  WebUIEdgeLambdaVersion
+  WebUIUserPool / Client / Domain                  WebUIEdgeLambdaRole
+  WebUIAdminSecret                                 WebUIEdgeSigningKeySecret
+  WebUIUserCreationFunction ───────────────────►   WebUIEdgeConfigSecret
+                                                     (written cross-region
+                                                      after Cognito created)
+```
+
+### Deployment Flow (Installer)
+
+```
+1. User chooses region (e.g. eu-west-1) + enables WebUI auth
+2. Installer builds + uploads edge Lambda zip to S3 in us-east-1
+3. Installer deploys edge-stack.yaml in us-east-1
+   → Outputs: EdgeLambdaVersionArn, EdgeConfigSecretArn/Name,
+              SigningKeySecretArn/Name
+4. Installer deploys template.yaml in $DEPLOY_REGION
+   → Passes edge-stack outputs as CFN parameters
+   → CloudFront references EdgeLambdaVersionArn (already in us-east-1)
+5. Custom Resource (runs in $DEPLOY_REGION) writes to us-east-1 secrets
+   via cross-region boto3.client('secretsmanager', region_name='us-east-1')
+   → Writes admin creds to WebUIAdminSecret ($DEPLOY_REGION)
+   → Reads signing key from us-east-1 WebUIEdgeSigningKeySecret
+   → Writes merged config to us-east-1 WebUIEdgeConfigSecret
+```
+
+### Cross-Region Secret Writes
+
+The Custom Resource Lambda runs in `$DEPLOY_REGION` but must write to the us-east-1 config secret. It uses **two boto3 clients**:
+
+```python
+sm_local  = boto3.client('secretsmanager', region_name=region)          # admin secret
+sm_edge   = boto3.client('secretsmanager', region_name='us-east-1')     # edge config + signing key
+```
+
+IAM policy on `WebUIUserCreationRole` grants:
+- `secretsmanager:PutSecretValue` on `WebUIAdminSecret` (regional ARN)
+- `secretsmanager:PutSecretValue + GetSecretValue` on edge secrets (us-east-1 ARNs, cross-region OK via IAM)
+
+### Lambda@Edge Cold Start
+
+The Lambda@Edge function (in us-east-1) reads config from `WebUIEdgeConfigSecret` (also us-east-1) at cold start — no cross-region penalty.
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `deploy/cloudformation/edge-stack.yaml` | Companion stack, always deploys in us-east-1 |
+| `deploy/cloudformation/template.yaml`  | Main stack, deploys in `$DEPLOY_REGION` |
+| `packs/kirocrew/webui-auth-edge/index.js` | Lambda@Edge handler |
+| `packs/kirocrew/webui-auth-edge/build.sh` | Zip builder |
+
+## CFN Parameters — Main Stack (new)
+
+| Parameter | Source | Description |
+|-----------|--------|-------------|
+| `EdgeLambdaVersionArn` | edge-stack output | CloudFront associates this version |
+| `EdgeConfigSecretName` | edge-stack output | Custom Resource uses for cross-region write |
+| `EdgeConfigSecretArn`  | edge-stack output | IAM Resource constraint |
+| `SigningKeySecretName` | edge-stack output | Custom Resource reads signing key |
+| `SigningKeySecretArn`  | edge-stack output | IAM Resource constraint |
+
+## CFN Parameters — Edge Stack
+
+| Parameter | Source | Description |
+|-----------|--------|-------------|
+| `EnvironmentName` | installer | Matches main stack (aligns secret names) |
+| `EdgeLambdaS3Bucket` | installer | us-east-1 S3 bucket with the zip |
+| `EdgeLambdaS3Key` | installer | S3 key (content-addressed SHA hex) |
+| `EdgeLambdaCodeSha256` | installer | Base64 SHA256 for Version CodeSha256 |
+
+## Installer Flow (2-phase)
+
+```bash
+# Phase 1: Edge stack (us-east-1)
+deploy_edge_stack() {
+  # Upload zip to us-east-1 bucket
+  aws s3 cp "$zip" s3://${edge_bucket}/${key} --region us-east-1
+  # Deploy edge-stack.yaml in us-east-1
+  aws cloudformation deploy --template-file edge-stack.yaml \
+    --stack-name "${ENV_NAME}-edge-stack" --region us-east-1 \
+    --parameter-overrides EnvironmentName=$ENV_NAME ...
+  # Capture outputs
+  EDGE_LAMBDA_VERSION_ARN=$(cfn output EdgeLambdaVersionArn)
+  EDGE_CONFIG_SECRET_NAME=$(cfn output EdgeConfigSecretName)
+  ...
+}
+
+# Phase 2: Main stack ($DEPLOY_REGION)
+deploy_cfn_stack() {
+  # Passes edge outputs as params: EdgeLambdaVersionArn, etc.
+  aws cloudformation deploy --template-file template.yaml \
+    --stack-name "${ENV_NAME}-stack" --region $DEPLOY_REGION \
+    --parameter-overrides EdgeLambdaVersionArn=$EDGE_LAMBDA_VERSION_ARN ...
+}
+```
+
+## Uninstall
+
+Both stacks must be deleted. Edge stack deletion will wait up to ~1hr for Lambda@Edge replica GC before the function can be deleted (AWS behaviour).
+
+## Key Design Decisions
+
+- **S3 bucket for edge zip in us-east-1**: Lambda code S3 bucket must be in the same region as the function. The existing `$ENV_NAME-cfn-templates-$ACCOUNT_ID` bucket is in `$DEPLOY_REGION`; a separate `$ENV_NAME-edge-$ACCOUNT_ID` bucket is created in us-east-1.
+- **Secret names are deterministic**: `/lowkey/$ENV_NAME/webui-edge-config` and `/lowkey/$ENV_NAME/webui-edge-signing-key`. This lets the Lambda@Edge code look them up by name without needing the full ARN in the zip.
+- **Cross-region IAM**: IAM is global so the Custom Resource role can reference us-east-1 secret ARNs as Resource constraints even when running in eu-west-1.
+- **Rollback isolation**: If main stack fails, edge stack stays. Re-running the installer after fixing the main-stack issue re-uses the existing edge stack (idempotent deploy). If edge stack fails, the main stack never starts.
+
+## Residual Risks
+
+- **Stale key cache**: Lambda@Edge caches config in module scope. Signing key rotation → warm replicas serve stale key until natural cold-start (hours). Mitigate: document that rotation requires a new edge stack deploy.
+- **~1hr edge replica delete lag**: On stack teardown, `aws cloudformation delete-stack` on the edge stack will fail until Lambda@Edge replicas GC. Installer should surface this as an expected wait.
+- **Brief 503 on first deploy**: Custom Resource runs after CloudFront deploys (no explicit DependsOn). First viewer request during that window → Lambda@Edge reads `"pending"` → returns 503 (graceful). Typically <30s window.

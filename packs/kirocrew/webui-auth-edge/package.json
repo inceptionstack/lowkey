@@ -1,0 +1,13 @@
+{
+  "name": "kirocrew-webui-auth-edge",
+  "version": "1.0.0",
+  "description": "Lambda@Edge Cognito enforcement for KiroCrew CloudFront distribution",
+  "main": "index.js",
+  "type": "commonjs",
+  "dependencies": {
+    "cognito-at-edge": "^1.5.2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
