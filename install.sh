@@ -2117,7 +2117,7 @@ configure_webui_auth() {
     return 0
   fi
 
-  if [[ "${AUTO_YES:-false}" != true ]] && ! confirm "Protect ${pack_name} WebUI with Cognito login? (enterprise-grade)" "default_yes"; then
+  if [[ "${AUTO_YES:-false}" != true ]] && ! confirm "Protect ${pack_name} WebUI with Cognito login? (enterprise-grade)" "default_no"; then
     warn "WebUI authentication disabled; use SSM/VPN-only access."
     return 0
   fi
