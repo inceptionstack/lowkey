@@ -3393,8 +3393,9 @@ run_config_and_review() {
         _KIRO_ATTEMPTS=$((_KIRO_ATTEMPTS + 1))
         _KIRO_INPUT=""
         prompt_secret "Kiro API key" _KIRO_INPUT ""
-        # Skip: empty input, or user typed "skip" (case-insensitive)
-        if [[ -z "$_KIRO_INPUT" ]] || [[ "${_KIRO_INPUT,,}" == "skip" ]]; then
+        # Skip: empty input, or user typed "skip" (case-insensitive, Bash 3-safe)
+        _KIRO_INPUT_LC="$(printf '%s' "$_KIRO_INPUT" | tr '[:upper:]' '[:lower:]')"
+        if [[ -z "$_KIRO_INPUT" ]] || [[ "$_KIRO_INPUT_LC" == "skip" ]]; then
           _KIRO_API_KEY=""
           break
         fi
@@ -3412,7 +3413,7 @@ run_config_and_review() {
           _KIRO_API_KEY=""
         fi
       done
-      unset _KIRO_INPUT _KIRO_ATTEMPTS _KIRO_MAX_ATTEMPTS _KIRO_REMAINING
+      unset _KIRO_INPUT _KIRO_INPUT_LC _KIRO_ATTEMPTS _KIRO_MAX_ATTEMPTS _KIRO_REMAINING
       if [[ -n "$_KIRO_API_KEY" ]]; then
         # Secret name determined now; actual write deferred until after user confirms
         _KIRO_SECRET_NAME="/lowkey/${ENV_NAME}/kiro-api-key"
