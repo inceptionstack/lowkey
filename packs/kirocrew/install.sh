@@ -627,23 +627,43 @@ if [[ "${PACK_ARG_PROFILE:-}" == "builder" ]]; then
   ok "agent.sandbox=off written to ${local_cfg} (builder profile, upgrade-safe)"
 fi
 
-# ── Step 15b: Denied commands allow-list ─────────────────────────────────────
+# ── Step 15b: Denied commands allow-list (builder profile only) ────────────────
 # KiroCrew ships an out-of-the-box denied-commands list that blocks certain
-# shell commands (rm -rf, curl | sh, etc). For the lowkey deploy we disable
-# that list wholesale — the agent is already sandboxed at the AWS/network
-# layer (VPC, IAM, ALB origin-verify) and the builder profile deliberately
-# turns off the process-level sandbox. The default deny-list gets in the way
-# of legitimate builder work. Write BEFORE the gateway starts so the setting
-# takes effect on the first session spawn.
-step "Configuring denied_commands (disable_all=true)"
-KIROCREW_DENIED_FILE="${KIROCREW_CFG_DIR}/denied_commands.json"
-mkdir -p "${KIROCREW_CFG_DIR}"
-KIRO_USER="${KIRO_USER:-ec2-user}"
-printf '{\n  "disable_all": true\n}\n' > "${KIROCREW_DENIED_FILE}"
-chown "${KIRO_USER}:${KIRO_USER}" "${KIROCREW_DENIED_FILE}" 2>/dev/null || true
-chmod 600 "${KIROCREW_DENIED_FILE}"
-ok "denied_commands.json written to ${KIROCREW_DENIED_FILE} (disable_all=true)"
-
+# shell commands (rm -rf, curl | sh, etc). For the BUILDER profile only,
+# disable that list wholesale — the agent is already sandboxed at the AWS/
+# network layer (VPC, IAM, ALB origin-verify) and builder deliberately
+# turns off the process-level sandbox. The default deny-list gets in the
+# way of legitimate builder work.
+#
+# For personal_assistant / account_assistant profiles the deny-list stays
+# on: VPC and IAM restrictions do not protect local files, credentials,
+# or agent state on the instance itself.
+#
+# Also: merge into existing denied_commands.json using jq (mirrors the
+# config.local.json write above) so operator-defined rules or other
+# supported settings aren't clobbered on rerun.
+if [[ "${PACK_ARG_PROFILE:-}" == "builder" ]]; then
+  step "Configuring denied_commands (builder profile — disable_all=true)"
+  KIROCREW_DENIED_FILE="${KIROCREW_CFG_DIR}/denied_commands.json"
+  mkdir -p "${KIROCREW_CFG_DIR}"
+  KIRO_USER="${KIRO_USER:-ec2-user}"
+  if [[ -f "${KIROCREW_DENIED_FILE}" ]]; then
+    # File exists — merge disable_all into it, preserving other keys
+    tmp_denied="$(mktemp)"
+    if jq '.disable_all = true' "${KIROCREW_DENIED_FILE}" > "${tmp_denied}" 2>/dev/null; then
+      mv "${tmp_denied}" "${KIROCREW_DENIED_FILE}"
+    else
+      rm -f "${tmp_denied}"
+      warn "jq merge failed on ${KIROCREW_DENIED_FILE} (likely malformed JSON); overwriting with disable_all-only"
+      printf '{\n  "disable_all": true\n}\n' > "${KIROCREW_DENIED_FILE}"
+    fi
+  else
+    printf '{\n  "disable_all": true\n}\n' > "${KIROCREW_DENIED_FILE}"
+  fi
+  chown "${KIRO_USER}:${KIRO_USER}" "${KIROCREW_DENIED_FILE}" 2>/dev/null || true
+  chmod 600 "${KIROCREW_DENIED_FILE}"
+  ok "denied_commands.json written to ${KIROCREW_DENIED_FILE} (builder profile, disable_all=true, merge-preserving)"
+fi
 # ── Step 16: Install systemd service ─────────────────────────────────────────
 if [[ "${START_GATEWAY}" == "true" ]]; then
   step "Installing kirocrew-gateway systemd service"
