@@ -134,6 +134,8 @@ CODEX_MODEL=""
 KIRO_FROM_SECRET=""
 TELEGRAM_BOT_TOKEN_SECRET="${TELEGRAM_BOT_TOKEN_SECRET:-}"
 TELEGRAM_USER="${TELEGRAM_USER:-}"
+KIROCREW_TG_BOT_TOKEN="${KIROCREW_TG_BOT_TOKEN:-}"
+KIROCREW_TG_USER_ID="${KIROCREW_TG_USER_ID:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -218,6 +220,16 @@ while [[ $# -gt 0 ]]; do
     --telegram-user)
       [[ $# -gt 1 ]] || { echo "ERROR: --telegram-user requires a value" >&2; exit 1; }
       TELEGRAM_USER="$2"
+      shift 2
+      ;;
+    --kirocrew-tg-bot-token)
+      [[ $# -gt 1 ]] || { echo "ERROR: --kirocrew-tg-bot-token requires a value" >&2; exit 1; }
+      KIROCREW_TG_BOT_TOKEN="$2"
+      shift 2
+      ;;
+    --kirocrew-tg-user-id)
+      [[ $# -gt 1 ]] || { echo "ERROR: --kirocrew-tg-user-id requires a value" >&2; exit 1; }
+      KIROCREW_TG_USER_ID="$2"
       shift 2
       ;;
     --primary)

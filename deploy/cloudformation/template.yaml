@@ -26,6 +26,8 @@ Metadata:
           - KiroFromSecret
           - TelegramBotTokenSecret
           - TelegramUser
+          - KirocrewTgBotToken
+          - KirocrewTgUserId
           - Primary
           - DailyDriver
           - CodexModel
@@ -271,6 +273,19 @@ Parameters:
     Type: String
     Default: ''
     Description: "Telegram username for bot pairing (roundhouse pack only, without @ prefix)."
+
+  KirocrewTgBotToken:
+    Type: String
+    Default: ''
+    NoEcho: true
+    Description: "KiroCrew Telegram bot token (kirocrew pack only). Optional opt-in wiring. Format: <digits>:<base64ish>."
+
+  KirocrewTgUserId:
+    Type: String
+    Default: ''
+    NoEcho: true
+    Description: "KiroCrew Telegram numeric user ID (kirocrew pack only). Optional opt-in wiring. Digits only."
+
 
   Primary:
     Type: String
@@ -1861,6 +1876,8 @@ Resources:
           export KIRO_FROM_SECRET="${KiroFromSecret}"
           export TELEGRAM_BOT_TOKEN_SECRET="${TelegramBotTokenSecret}"
           export TELEGRAM_USER="${TelegramUser}"
+          export KIROCREW_TG_BOT_TOKEN="${KirocrewTgBotToken}"
+          export KIROCREW_TG_USER_ID="${KirocrewTgUserId}"
           export PACK_NAME="${PackName}"
           export PROFILE_NAME="${ProfileName}"
           # Publish failure to SSM and signal CFN on any error
@@ -1905,6 +1922,8 @@ Resources:
             --kiro-from-secret "$KIRO_FROM_SECRET" \
             --telegram-bot-token-secret "$TELEGRAM_BOT_TOKEN_SECRET" \
             --telegram-user "$TELEGRAM_USER" \
+            --kirocrew-tg-bot-token "$KIROCREW_TG_BOT_TOKEN" \
+            --kirocrew-tg-user-id "$KIROCREW_TG_USER_ID" \
             --primary "${Primary}" \
             --daily-driver "${DailyDriver}" \
             --codex-model "${CodexModel}"

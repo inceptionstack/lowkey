@@ -2390,7 +2390,7 @@ collect_security_config() {
 # Parameter source-of-truth: single mapping for CFN Console and CFN CLI
 # ============================================================================
 # ⚠ KEEP THESE TWO ARRAYS IN SYNC — same order, same count
-PARAM_CFN_NAMES=(EnvironmentName PackName ProfileName InstanceType DefaultModel ModelMode BedrockRegion LokiWatermark EnableBedrockForm EnableSecurityHub EnableGuardDuty EnableInspector EnableAccessAnalyzer EnableConfigRecorder ExistingVpcId ExistingSubnetId ExistingSubnetId2 RepoBranch KiroFromSecret TelegramBotTokenSecret TelegramUser Primary DailyDriver CodexModel EnableWebUIAuth WebUIAdminEmail EdgeLambdaVersionArn EdgeConfigSecretName EdgeConfigSecretArn SigningKeySecretName SigningKeySecretArn)
+PARAM_CFN_NAMES=(EnvironmentName PackName ProfileName InstanceType DefaultModel ModelMode BedrockRegion LokiWatermark EnableBedrockForm EnableSecurityHub EnableGuardDuty EnableInspector EnableAccessAnalyzer EnableConfigRecorder ExistingVpcId ExistingSubnetId ExistingSubnetId2 RepoBranch KiroFromSecret TelegramBotTokenSecret TelegramUser Primary DailyDriver CodexModel EnableWebUIAuth WebUIAdminEmail EdgeLambdaVersionArn EdgeConfigSecretName EdgeConfigSecretArn SigningKeySecretName SigningKeySecretArn KirocrewTgBotToken KirocrewTgUserId)
 PARAM_VALUES=()  # populated by build_deploy_params()
 
 # Per-pack default model (passed to CFN DefaultModel / bootstrap.sh --model).
@@ -2457,6 +2457,8 @@ build_deploy_params() {
     "${EDGE_CONFIG_SECRET_ARN:-}"
     "${SIGNING_KEY_SECRET_NAME:-}"
     "${SIGNING_KEY_SECRET_ARN:-}"
+    "${KIROCREW_TG_BOT_TOKEN:-}"
+    "${KIROCREW_TG_USER_ID:-}"
   )
   # Validate parallel arrays are in sync
   [[ ${#PARAM_CFN_NAMES[@]} -eq ${#PARAM_VALUES[@]} ]] \
