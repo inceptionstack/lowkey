@@ -3380,33 +3380,56 @@ run_config_and_review() {
       echo -e "  Create an API key at: ${CYAN}https://app.kiro.dev/settings/api-keys${NC}"
       echo -e "  (Your organization must have API keys enabled.)"
       echo ""
-      echo -e "  Press Enter to skip (you can authenticate via browser later)."
+      echo -e "  Press Enter (empty input) or type 'skip' to skip and authenticate via browser later."
       echo ""
       _KIRO_API_KEY=""
-      prompt_secret "Kiro API key" _KIRO_API_KEY ""
-      if [[ -n "$_KIRO_API_KEY" ]]; then
-        # Validate format: ksk_<alphanumeric>, ~35 chars
-        if [[ ! "$_KIRO_API_KEY" =~ ^ksk_[A-Za-z0-9]{26,96}$ ]]; then
-          warn "API key doesn't match expected format (ksk_...). Skipping — authenticate manually after install."
+      # Retry loop: allow user to correct format mistakes without losing the step.
+      # Skip conditions: empty input, or literal 'skip' typed, or user cancels the
+      # gum prompt (Esc / Ctrl-C returns non-zero and prompt_secret falls back to
+      # the default "" — which we treat as skip).
+      _KIRO_ATTEMPTS=0
+      _KIRO_MAX_ATTEMPTS=5
+      while (( _KIRO_ATTEMPTS < _KIRO_MAX_ATTEMPTS )); do
+        _KIRO_ATTEMPTS=$((_KIRO_ATTEMPTS + 1))
+        _KIRO_INPUT=""
+        prompt_secret "Kiro API key" _KIRO_INPUT ""
+        # Skip: empty input, or user typed "skip" (case-insensitive)
+        if [[ -z "$_KIRO_INPUT" ]] || [[ "${_KIRO_INPUT,,}" == "skip" ]]; then
           _KIRO_API_KEY=""
-        else
-          # Secret name determined now; actual write deferred until after user confirms
-          _KIRO_SECRET_NAME="/lowkey/${ENV_NAME}/kiro-api-key"
-          KIRO_FROM_SECRET="${_KIRO_SECRET_NAME}"
-          # Update PARAM_VALUES at the KiroFromSecret index (looked up by name to
-          # survive future reordering; hardcoded index bit us when ExistingSubnetId2
-          # was inserted and shifted RepoBranch/KiroFromSecret by one).
-          _kiro_idx=-1
-          for _i in "${!PARAM_CFN_NAMES[@]}"; do
-            [[ "${PARAM_CFN_NAMES[$_i]}" == "KiroFromSecret" ]] && { _kiro_idx=$_i; break; }
-          done
-          if [[ "$_kiro_idx" -ge 0 ]]; then
-            PARAM_VALUES[$_kiro_idx]="$KIRO_FROM_SECRET"
-          else
-            fail "BUG: KiroFromSecret not found in PARAM_CFN_NAMES"
-          fi
-          ok "API key will be stored in Secrets Manager: ${_KIRO_SECRET_NAME}"
+          break
         fi
+        # Validate format: ksk_<alphanumeric>, ~35 chars
+        if [[ "$_KIRO_INPUT" =~ ^ksk_[A-Za-z0-9]{26,96}$ ]]; then
+          _KIRO_API_KEY="$_KIRO_INPUT"
+          break
+        fi
+        # Invalid format — warn and re-prompt
+        _KIRO_REMAINING=$((_KIRO_MAX_ATTEMPTS - _KIRO_ATTEMPTS))
+        if (( _KIRO_REMAINING > 0 )); then
+          warn "API key doesn't match expected format (ksk_... followed by 26-96 alphanumeric chars). ${_KIRO_REMAINING} attempt(s) left. Press Enter or type 'skip' to skip."
+        else
+          warn "API key doesn't match expected format after ${_KIRO_MAX_ATTEMPTS} attempts. Skipping — authenticate manually after install."
+          _KIRO_API_KEY=""
+        fi
+      done
+      unset _KIRO_INPUT _KIRO_ATTEMPTS _KIRO_MAX_ATTEMPTS _KIRO_REMAINING
+      if [[ -n "$_KIRO_API_KEY" ]]; then
+        # Secret name determined now; actual write deferred until after user confirms
+        _KIRO_SECRET_NAME="/lowkey/${ENV_NAME}/kiro-api-key"
+        KIRO_FROM_SECRET="${_KIRO_SECRET_NAME}"
+        # Update PARAM_VALUES at the KiroFromSecret index (looked up by name to
+        # survive future reordering; hardcoded index bit us when ExistingSubnetId2
+        # was inserted and shifted RepoBranch/KiroFromSecret by one).
+        _kiro_idx=-1
+        for _i in "${!PARAM_CFN_NAMES[@]}"; do
+          [[ "${PARAM_CFN_NAMES[$_i]}" == "KiroFromSecret" ]] && { _kiro_idx=$_i; break; }
+        done
+        if [[ "$_kiro_idx" -ge 0 ]]; then
+          PARAM_VALUES[$_kiro_idx]="$KIRO_FROM_SECRET"
+        else
+          fail "BUG: KiroFromSecret not found in PARAM_CFN_NAMES"
+        fi
+        ok "API key will be stored in Secrets Manager: ${_KIRO_SECRET_NAME}"
       else
         info "Skipping API key — authenticate after install with: kiro-cli login --use-device-flow"
       fi
