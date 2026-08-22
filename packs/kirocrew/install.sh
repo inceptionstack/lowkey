@@ -358,16 +358,54 @@ if command -v npm >/dev/null 2>&1; then
       ln -sfn "${_pw_bin}" "${_pw_link_dir}/playwright-cli"
       ok "Symlinked ${_pw_link_dir}/playwright-cli -> ${_pw_bin} (for kirocrew-gateway systemd unit PATH)"
 
-      # 2. Install Chromium + system deps. --with-deps invokes sudo to install
-      #    system libraries via the OS package manager (dnf on AL2023).
-      #    Chromium binary goes to ~/.cache/ms-playwright/ (per-user cache,
-      #    which is what the kirocrew-gateway process reads since it runs
-      #    as ec2-user).
-      log "Installing Chromium browser + system dependencies (may take 1-3 minutes)..."
-      if playwright-cli install-browser --with-deps 2>&1 | while IFS= read -r line; do log "  playwright: ${line}"; done; then
+      # 2a. Install Chromium system deps via dnf (AL2023 uses dnf, not apt-get).
+      #     Playwright's --with-deps flag shells out to apt-get unconditionally,
+      #     so on AL2023 it silently fails the deps phase and Chromium is left
+      #     unusable at runtime (Codex P1 on PR #94).
+      #     Package list per Roy's confirmed AL2023 recipe (2026-08-22 23:35 UTC):
+      _pw_dnf_pkgs=(
+        libXcomposite libXdamage libXrandr nss alsa-lib atk cups-libs
+        gtk3 libdrm mesa-libgbm pango libicu woff2
+      )
+      # Distro guard: only run dnf on RHEL-family. On other distros we skip the
+      # deps step; the browser install still runs and the agent surfaces a clear
+      # runtime error if libs are missing.
+      _pw_is_dnf_distro=false
+      if [[ -r /etc/os-release ]]; then
+        # shellcheck source=/dev/null
+        _os_id="$(. /etc/os-release && echo "${ID:-} ${ID_LIKE:-}")"
+        case "$_os_id" in
+          *amzn*|*rhel*|*fedora*|*centos*|*rocky*|*almalinux*) _pw_is_dnf_distro=true ;;
+        esac
+      fi
+      if [[ "$_pw_is_dnf_distro" == true ]] && command -v dnf >/dev/null 2>&1; then
+        log "Installing Chromium runtime libs via dnf (AL2023): ${_pw_dnf_pkgs[*]}"
+        if sudo dnf install -y -q "${_pw_dnf_pkgs[@]}" 2>&1 | while IFS= read -r line; do log "  dnf: ${line}"; done; then
+          ok "Chromium runtime libs installed via dnf"
+        else
+          warn "dnf install of Chromium libs returned non-zero — browser may fail at launch; check dnf log"
+        fi
+      else
+        info "Non-dnf distro or dnf unavailable — skipping RPM deps; browser install will still run"
+      fi
+      unset _pw_dnf_pkgs _pw_is_dnf_distro _os_id
+
+      # 2b. Install Chromium binary itself (~/.cache/ms-playwright/, per-user).
+      #     No --with-deps: system libs handled by 2a above on AL2023.
+      log "Installing Chromium browser binary (may take 30-90s)..."
+      if playwright-cli install-browser 2>&1 | while IFS= read -r line; do log "  playwright: ${line}"; done; then
         ok "Chromium browser installed under ~/.cache/ms-playwright/"
       else
-        warn "playwright-cli install-browser failed — agent can retry on first use, but may need sudo for --with-deps (non-fatal)"
+        warn "playwright-cli install-browser failed — agent can retry on first use (non-fatal)"
+      fi
+
+      # 2c. Install agent skills so KiroCrew has richer command context.
+      #     Non-fatal: agent works without skills but with less introspection.
+      log "Installing Playwright agent skills..."
+      if playwright-cli install --skills 2>&1 | while IFS= read -r line; do log "  playwright: ${line}"; done; then
+        ok "Playwright agent skills installed"
+      else
+        warn "playwright-cli install --skills failed — non-fatal (agent still usable via --help discovery)"
       fi
     else
       warn "@playwright/cli installed but 'playwright-cli' not on PATH; skipping browser install"
