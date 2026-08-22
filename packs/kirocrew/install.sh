@@ -358,46 +358,74 @@ if command -v npm >/dev/null 2>&1; then
       ln -sfn "${_pw_bin}" "${_pw_link_dir}/playwright-cli"
       ok "Symlinked ${_pw_link_dir}/playwright-cli -> ${_pw_bin} (for kirocrew-gateway systemd unit PATH)"
 
-      # 2a. Install Chromium system deps via dnf (AL2023 uses dnf, not apt-get).
+      # 2a. Install Chromium system deps via the right package manager.
       #     Playwright's --with-deps flag shells out to apt-get unconditionally,
       #     so on AL2023 it silently fails the deps phase and Chromium is left
-      #     unusable at runtime (Codex P1 on PR #94).
-      #     Package list per Roy's confirmed AL2023 recipe (2026-08-22 23:35 UTC):
-      _pw_dnf_pkgs=(
-        libXcomposite libXdamage libXrandr nss alsa-lib atk cups-libs
-        gtk3 libdrm mesa-libgbm pango libicu woff2
-      )
-      # Distro guard: only run dnf on RHEL-family. On other distros we skip the
-      # deps step; the browser install still runs and the agent surfaces a clear
-      # runtime error if libs are missing.
-      _pw_is_dnf_distro=false
+      #     unusable at runtime (Codex P1 on PR #94, confirmed by AL2023 issue
+      #     #820: https://github.com/amazonlinux/amazon-linux-2023/issues/820).
+      #
+      #     Strategy:
+      #       - RHEL-family (amzn/rhel/fedora/centos/rocky/almalinux): sudo dnf
+      #         install an explicit RPM package list, then install-browser
+      #         WITHOUT --with-deps (--with-deps would still try apt-get).
+      #       - Debian-family (ubuntu/debian): keep the original
+      #         install-browser --with-deps path since apt-get is what
+      #         Playwright actually invokes there.
+      #       - Unknown distro: try install-browser --with-deps as a best
+      #         effort; agent surfaces a runtime error if libs are missing.
+      _pw_distro_family="unknown"
       if [[ -r /etc/os-release ]]; then
         # shellcheck source=/dev/null
         _os_id="$(. /etc/os-release && echo "${ID:-} ${ID_LIKE:-}")"
         case "$_os_id" in
-          *amzn*|*rhel*|*fedora*|*centos*|*rocky*|*almalinux*) _pw_is_dnf_distro=true ;;
+          *amzn*|*rhel*|*fedora*|*centos*|*rocky*|*almalinux*) _pw_distro_family="rhel" ;;
+          *ubuntu*|*debian*)                                   _pw_distro_family="debian" ;;
         esac
       fi
-      if [[ "$_pw_is_dnf_distro" == true ]] && command -v dnf >/dev/null 2>&1; then
-        log "Installing Chromium runtime libs via dnf (AL2023): ${_pw_dnf_pkgs[*]}"
+
+      if [[ "$_pw_distro_family" == "rhel" ]] && command -v dnf >/dev/null 2>&1; then
+        # Package list per Roy's confirmed AL2023 recipe (2026-08-22).
+        _pw_dnf_pkgs=(
+          libXcomposite libXdamage libXrandr nss alsa-lib atk cups-libs
+          gtk3 libdrm mesa-libgbm pango libicu woff2
+        )
+        log "Installing Chromium runtime libs via dnf (AL2023-family): ${_pw_dnf_pkgs[*]}"
         if sudo dnf install -y -q "${_pw_dnf_pkgs[@]}" 2>&1 | while IFS= read -r line; do log "  dnf: ${line}"; done; then
           ok "Chromium runtime libs installed via dnf"
         else
           warn "dnf install of Chromium libs returned non-zero — browser may fail at launch; check dnf log"
         fi
-      else
-        info "Non-dnf distro or dnf unavailable — skipping RPM deps; browser install will still run"
-      fi
-      unset _pw_dnf_pkgs _pw_is_dnf_distro _os_id
+        unset _pw_dnf_pkgs
 
-      # 2b. Install Chromium binary itself (~/.cache/ms-playwright/, per-user).
-      #     No --with-deps: system libs handled by 2a above on AL2023.
-      log "Installing Chromium browser binary (may take 30-90s)..."
-      if playwright-cli install-browser 2>&1 | while IFS= read -r line; do log "  playwright: ${line}"; done; then
-        ok "Chromium browser installed under ~/.cache/ms-playwright/"
+        # 2b. Install Chromium binary itself. No --with-deps: apt-get path
+        #     doesn't exist on AL2023, and libs were just installed via dnf.
+        log "Installing Chromium browser binary (may take 30-90s)..."
+        if playwright-cli install-browser 2>&1 | while IFS= read -r line; do log "  playwright: ${line}"; done; then
+          ok "Chromium browser installed under ~/.cache/ms-playwright/"
+        else
+          warn "playwright-cli install-browser failed — agent can retry on first use (non-fatal)"
+        fi
+
+      elif [[ "$_pw_distro_family" == "debian" ]]; then
+        # Ubuntu / Debian: Playwright's --with-deps IS supported here and
+        # actually invokes apt-get correctly. Keep the original combined path.
+        log "Installing Chromium browser + system dependencies via apt (debian-family, may take 1-3 minutes)..."
+        if playwright-cli install-browser --with-deps 2>&1 | while IFS= read -r line; do log "  playwright: ${line}"; done; then
+          ok "Chromium browser + apt deps installed"
+        else
+          warn "playwright-cli install-browser --with-deps failed — agent can retry on first use (non-fatal)"
+        fi
+
       else
-        warn "playwright-cli install-browser failed — agent can retry on first use (non-fatal)"
+        # Unknown distro (not RHEL, not Debian): best-effort.
+        log "Distro '${_os_id:-unknown}' not recognized as RHEL or Debian family. Attempting playwright's built-in --with-deps..."
+        if playwright-cli install-browser --with-deps 2>&1 | while IFS= read -r line; do log "  playwright: ${line}"; done; then
+          ok "Chromium browser installed (best-effort on unknown distro)"
+        else
+          warn "playwright-cli install-browser --with-deps failed on unknown distro '${_os_id:-unknown}' — may need manual system-lib install"
+        fi
       fi
+      unset _pw_distro_family _os_id
 
       # 2c. Install agent skills so KiroCrew has richer command context.
       #     Non-fatal: agent works without skills but with less introspection.
