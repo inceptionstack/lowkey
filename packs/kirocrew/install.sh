@@ -201,11 +201,15 @@ fi
 
 curl -fsSL https://cli.kiro.dev/install -o /tmp/install-kiro-cli.sh
 
-# Run as ec2-user if we're root; otherwise run as current user
+# Run as ec2-user if we're root; otherwise run as current user.
+# Use -H so HOME is set to /home/ec2-user; the upstream kiro-cli installer
+# does mkdir "$HOME/.agents" and would create /.agents with empty HOME.
 if [[ "$(id -u)" == "0" ]] && id ec2-user &>/dev/null; then
-  sudo -u ec2-user bash /tmp/install-kiro-cli.sh
+  sudo -H -u ec2-user bash /tmp/install-kiro-cli.sh
 else
-  bash /tmp/install-kiro-cli.sh
+  # We're already ec2-user (via bootstrap.sh's sudo -u). Ensure HOME is set
+  # so nested "mkdir $HOME/..." calls in kiro-cli installer don't collapse to /.
+  HOME="${HOME:-/home/ec2-user}" bash /tmp/install-kiro-cli.sh
 fi
 rm -f /tmp/install-kiro-cli.sh
 
