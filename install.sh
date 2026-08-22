@@ -1956,16 +1956,7 @@ choose_pack() {
         [[ "${PACK_NAMES[$i]}" == "$sp" ]] || continue
         pname="${PACK_NAMES[$i]}"
 
-        # Determine UI type prefix
-        in_list=false
-        for wp in "${webui_packs[@]}"; do
-          [[ "$pname" == "$wp" ]] && in_list=true && break
-        done
-        if [[ "$in_list" == true ]]; then
-          item="[WebUI] ${pname} — ${PACK_DESCS[$i]}"
-        else
-          item="[Terminal] ${pname} — ${PACK_DESCS[$i]}"
-        fi
+        item="${pname} — ${PACK_DESCS[$i]}"
         [[ "${PACK_EXPERIMENTAL[$i]}" == "true" ]] && item+=" (experimental)"
 
         gum_items+=("$item")
@@ -2000,7 +1991,7 @@ choose_pack() {
     "${gum_items[@]}" \
     || { fail "Pack selection is required"; }
   PACK_NAME="${pack_choice%% —*}"
-  PACK_NAME="${PACK_NAME##*] }"  # Strip [WebUI]/[Terminal] prefix if present
+  PACK_NAME="${PACK_NAME%" "}"  # trim trailing space before the em dash separator, if any
   for i in "${!PACK_NAMES[@]}"; do
     if [[ "${PACK_NAMES[$i]}" == "$PACK_NAME" && "${PACK_EXPERIMENTAL[$i]}" == "true" ]]; then
       warn "${PACK_NAME} is experimental — expect rough edges"
@@ -2126,7 +2117,7 @@ configure_webui_auth() {
     return 0
   fi
 
-  if [[ "${AUTO_YES:-false}" != true ]] && ! confirm "Protect ${pack_name} WebUI with Cognito login? (enterprise-grade)" "default_yes"; then
+  if [[ "${AUTO_YES:-false}" != true ]] && ! confirm "Protect ${pack_name} WebUI with Cognito login? (enterprise-grade)" "default_no"; then
     warn "WebUI authentication disabled; use SSM/VPN-only access."
     return 0
   fi
@@ -3045,8 +3036,9 @@ show_complete() {
   echo ""
   echo -e "$info_block" | $GUM style --foreground 255 --padding "1 2" --margin "0 2"
   echo ""
-  echo -e "$next_block" | $GUM style --border rounded --border-foreground 82 \
-    --foreground 117 --bold --padding "1 2" --margin "0 2"
+  # No border on the next-steps block: URLs and commands need to be easy to
+  # copy without the box side rails breaking word-wrap or triple-click select.
+  echo -e "$next_block" | $GUM style --foreground 117 --bold --padding "1 2" --margin "0 2"
   echo ""
 
   # Try to copy connect command to clipboard
