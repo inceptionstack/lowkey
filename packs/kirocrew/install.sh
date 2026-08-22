@@ -29,7 +29,7 @@ PACK_ARG_REGION="$(pack_config_get region "us-east-1")"
 PACK_ARG_FROM_SECRET="$(pack_config_get from-secret "")"
 PACK_ARG_API_KEY="$(pack_config_get kiro-api-key "")"
 PACK_ARG_CHANNEL="$(pack_config_get channel "insider")"
-PACK_ARG_KIROCREW_VERSION="$(pack_config_get kirocrew-version "0.3.0rc8")"
+PACK_ARG_KIROCREW_VERSION="$(pack_config_get kirocrew-version "0.3.0")"
 PACK_ARG_EXTRAS="$(pack_config_get extras "aws,voice")"
 PACK_ARG_GATEWAY_PORT="$(pack_config_get gateway-port "5476")"
 PACK_ARG_START_GATEWAY="$(pack_config_get start-gateway "true")"
@@ -583,7 +583,39 @@ else
   warn "No embedding model found (>500MB) in ${KIROCREW_MODELS_DIR} — will download on first gateway start"
 fi
 
-# ── Step 15: Install systemd service ─────────────────────────────────────────
+# ── Step 15: Agent sandbox config (builder profile only) ────────────────────
+# The builder profile needs unrestricted filesystem + credential access
+# (AWS CLI, SSH keys, kiro-cli auth tokens). Write agent.sandbox=off to
+# config.local.json (wins over config.json, survives upgrades) BEFORE the
+# gateway starts so it takes effect on the first session spawn without a restart.
+#
+# Config key: agent.sandbox (loader.py:1352, enum=["auto","off"])
+# Default is "auto" (user namespace sandbox enabled on Linux).
+KIROCREW_CFG_DIR="${KIROCREW_HOME:-${HOME}/.kiro/crew}"
+if [[ "${PROFILE_NAME:-}" == "builder" ]]; then
+  step "Configuring agent sandbox (builder profile — disabling namespace sandbox)"
+  mkdir -p "${KIROCREW_CFG_DIR}"
+  # Merge into config.local.json using jq so we don't clobber other local overrides
+  local_cfg="${KIROCREW_CFG_DIR}/config.local.json"
+  if [[ -f "${local_cfg}" ]]; then
+    # File exists — merge agent.sandbox into it
+    tmp_cfg="$(mktemp)"
+    if jq '.agent.sandbox = "off"' "${local_cfg}" > "${tmp_cfg}" 2>/dev/null; then
+      mv "${tmp_cfg}" "${local_cfg}"
+    else
+      rm -f "${tmp_cfg}"
+      warn "jq merge failed; writing agent.sandbox=off directly to ${local_cfg}"
+      printf '{"agent":{"sandbox":"off"}}\n' > "${local_cfg}"
+    fi
+  else
+    printf '{"agent":{"sandbox":"off"}}\n' > "${local_cfg}"
+  fi
+  chown "${KIRO_USER}:${KIRO_USER}" "${local_cfg}" 2>/dev/null || true
+  chmod 600 "${local_cfg}"
+  ok "agent.sandbox=off written to ${local_cfg} (builder profile, upgrade-safe)"
+fi
+
+# ── Step 16: Install systemd service ─────────────────────────────────────────
 if [[ "${START_GATEWAY}" == "true" ]]; then
   step "Installing kirocrew-gateway systemd service"
 
