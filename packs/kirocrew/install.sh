@@ -35,6 +35,8 @@ PACK_ARG_GATEWAY_PORT="$(pack_config_get gateway-port "5476")"
 PACK_ARG_START_GATEWAY="$(pack_config_get start-gateway "true")"
 PACK_ARG_KIROCREW_HOME="$(pack_config_get kirocrew-home "")"
 PACK_ARG_PROFILE="$(pack_config_get profile "")"
+PACK_ARG_TG_BOT_TOKEN="$(pack_config_get telegram-bot-token "")"
+PACK_ARG_TG_USER_ID="$(pack_config_get telegram-user-id "")"
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 usage() {
@@ -711,6 +713,58 @@ if [[ "${PACK_ARG_PROFILE:-}" == "builder" ]]; then
   chown "${KIRO_USER}:${KIRO_USER}" "${KIROCREW_DENIED_FILE}" 2>/dev/null || true
   chmod 600 "${KIROCREW_DENIED_FILE}"
   ok "denied_commands.json written to ${KIROCREW_DENIED_FILE} (builder profile, disable_all=true, merge-preserving)"
+fi
+
+# Step 15c: Telegram channel wiring (opt-in via wizard)
+# When the operator opted in during the pre-deploy wizard, PACK_CONFIG carries
+# telegram-bot-token and telegram-user-id. Write both:
+#   - TELEGRAM_BOT_TOKEN=<token>  to  ~/.kiro/crew/.env  (env var; kirocrew
+#     prefers this over the config.bot_token fallback so the secret stays out
+#     of config.json — see docs/telegram-integration.md)
+#   - telegram.enabled = true, telegram.allowed_user_ids = [<id>]  merged
+#     into ~/.kiro/crew/config.json via jq (upgrade-safe: preserves other keys)
+# Done BEFORE the gateway starts so it picks up the channel on first boot.
+if [[ -n "${PACK_ARG_TG_BOT_TOKEN:-}" && -n "${PACK_ARG_TG_USER_ID:-}" ]]; then
+  step "Wiring KiroCrew Telegram channel (bot token + allowed user ID)"
+  KIRO_USER="${KIRO_USER:-ec2-user}"
+  KIRO_USER_HOME="$(getent passwd "${KIRO_USER}" | cut -d: -f6 2>/dev/null || echo "/home/${KIRO_USER}")"
+  KIROCREW_ENV_DIR="${KIROCREW_HOME:-${KIRO_USER_HOME}/.kiro/crew}"
+  KIROCREW_ENV_FILE="${KIROCREW_ENV_DIR}/.env"
+  KIROCREW_MAIN_CFG="${KIROCREW_ENV_DIR}/config.json"
+
+  # 1) TELEGRAM_BOT_TOKEN in the .env file (idempotent: strip any prior line first)
+  ( umask 077
+    mkdir -p "${KIROCREW_ENV_DIR}"
+    if [[ -f "${KIROCREW_ENV_FILE}" ]]; then
+      grep -v '^TELEGRAM_BOT_TOKEN=' "${KIROCREW_ENV_FILE}" > "${KIROCREW_ENV_FILE}.tmp" 2>/dev/null || true
+      mv "${KIROCREW_ENV_FILE}.tmp" "${KIROCREW_ENV_FILE}"
+    fi
+    printf 'TELEGRAM_BOT_TOKEN=%s\n' "${PACK_ARG_TG_BOT_TOKEN}" >> "${KIROCREW_ENV_FILE}"
+  )
+  chmod 600 "${KIROCREW_ENV_FILE}"
+
+  # 2) Merge telegram.enabled + allowed_user_ids into config.json
+  #    User IDs are numeric per Telegram / KiroCrew (allowed_user_ids: [123456789]).
+  if [[ -f "${KIROCREW_MAIN_CFG}" ]]; then
+    tmp_cfg="$(mktemp)"
+    if jq --argjson uid "${PACK_ARG_TG_USER_ID}" \
+         '.telegram = ((.telegram // {}) + {enabled: true, allowed_user_ids: [$uid]})' \
+         "${KIROCREW_MAIN_CFG}" > "${tmp_cfg}" 2>/dev/null; then
+      mv "${tmp_cfg}" "${KIROCREW_MAIN_CFG}"
+    else
+      rm -f "${tmp_cfg}"
+      warn "jq merge failed on ${KIROCREW_MAIN_CFG}; writing telegram-only config as fallback (existing keys will be lost)"
+      printf '{\n  "telegram": { "enabled": true, "allowed_user_ids": [%s] }\n}\n' "${PACK_ARG_TG_USER_ID}" > "${KIROCREW_MAIN_CFG}"
+    fi
+  else
+    # First-boot: no config.json yet. Kirocrew will merge this with its defaults.
+    printf '{\n  "telegram": { "enabled": true, "allowed_user_ids": [%s] }\n}\n' "${PACK_ARG_TG_USER_ID}" > "${KIROCREW_MAIN_CFG}"
+  fi
+  chown -R "${KIRO_USER}:${KIRO_USER}" "${KIROCREW_ENV_DIR}" 2>/dev/null || true
+  chmod 600 "${KIROCREW_MAIN_CFG}"
+  ok "Telegram wired: bot token in ${KIROCREW_ENV_FILE}, allowed_user_ids=[${PACK_ARG_TG_USER_ID}] in ${KIROCREW_MAIN_CFG}"
+else
+  [[ -n "${PACK_ARG_TG_BOT_TOKEN:-}${PACK_ARG_TG_USER_ID:-}" ]] && warn "Telegram: got one of (bot token, user ID) but not both; skipping wiring."
 fi
 # ── Step 16: Install systemd service ─────────────────────────────────────────
 if [[ "${START_GATEWAY}" == "true" ]]; then

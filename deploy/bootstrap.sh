@@ -274,6 +274,8 @@ jq -n \
   --arg from_secret "$KIRO_FROM_SECRET" \
   --arg telegram_bot_token_secret "$TELEGRAM_BOT_TOKEN_SECRET" \
   --arg telegram_user "$TELEGRAM_USER" \
+  --arg telegram_bot_token "${KIROCREW_TG_BOT_TOKEN:-}" \
+  --arg telegram_user_id "${KIROCREW_TG_USER_ID:-}" \
   --arg skip_telemetron "$SKIP_TELEMETRON" \
   --arg primary "$PRIMARY" \
   --arg daily_driver "$DAILY_DRIVER" \
@@ -286,6 +288,8 @@ jq -n \
     "from-secret":$from_secret,
     telegram_bot_token_secret:$telegram_bot_token_secret,
     telegram_user:$telegram_user,
+    "telegram-bot-token":$telegram_bot_token,
+    "telegram-user-id":$telegram_user_id,
     "skip-telemetron":$skip_telemetron,
     primary:$primary,
     "daily-driver":$daily_driver,

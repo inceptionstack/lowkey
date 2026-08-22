@@ -3364,6 +3364,93 @@ run_config_and_review() {
     build_deploy_params
   fi
 
+  # Pack-specific: kirocrew Telegram channel setup
+  # Prompts the operator for a bot token + numeric user ID, both with retry
+  # loops that accept 'skip' or empty input to bail. Values flow to the pack
+  # via PACK_CONFIG (bootstrap.sh -> pack_config_get), which then writes:
+  #   - bot token  -> ~/.kiro/crew/.env  (as TELEGRAM_BOT_TOKEN=...)
+  #   - user ID    -> ~/.kiro/crew/config.json  ('telegram.allowed_user_ids')
+  #   - enabled    -> ~/.kiro/crew/config.json  ('telegram.enabled' = true)
+  # Both writes are gated on both values being present.
+  KIROCREW_TG_BOT_TOKEN=""
+  KIROCREW_TG_USER_ID=""
+  if [[ "${PACK_NAME:-}" == "kirocrew" && "$AUTO_YES" != true ]]; then
+    if confirm "Connect KiroCrew to Telegram? (chat with your agent from your phone)" "default_no"; then
+      echo ""
+      echo -e "  ${BOLD}Two things to get from Telegram before continuing:${NC}"
+      echo ""
+      echo -e "  1. ${BOLD}Create a bot${NC} — message ${CYAN}@BotFather${NC}, send ${BOLD}/newbot${NC},"
+      echo -e "     and follow the prompts. You'll get a token like ${DIM}123456789:AA…${NC}"
+      echo ""
+      echo -e "  2. ${BOLD}Find your user ID${NC} — message ${CYAN}@userinfobot${NC}; it replies with"
+      echo -e "     your number (e.g. ${DIM}123456789${NC}). That's the only account your"
+      echo -e "     bot will answer."
+      echo ""
+      echo -e "  ${DIM}Press Enter (empty) or type 'skip' at either prompt to skip Telegram setup.${NC}"
+      echo ""
+
+      # --- Bot token: retry loop, format ^[0-9]+:[A-Za-z0-9_-]+$ ---
+      _KC_TG_ATTEMPTS=0
+      _KC_TG_MAX=5
+      while (( _KC_TG_ATTEMPTS < _KC_TG_MAX )); do
+        _KC_TG_ATTEMPTS=$((_KC_TG_ATTEMPTS + 1))
+        _KC_TG_INPUT=""
+        prompt_secret "Telegram bot token" _KC_TG_INPUT ""
+        _KC_TG_INPUT_LC="$(printf '%s' "$_KC_TG_INPUT" | tr '[:upper:]' '[:lower:]')"
+        if [[ -z "$_KC_TG_INPUT" ]] || [[ "$_KC_TG_INPUT_LC" == "skip" ]]; then
+          KIROCREW_TG_BOT_TOKEN=""
+          break
+        fi
+        if [[ "$_KC_TG_INPUT" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]; then
+          KIROCREW_TG_BOT_TOKEN="$_KC_TG_INPUT"
+          break
+        fi
+        _KC_TG_REMAINING=$((_KC_TG_MAX - _KC_TG_ATTEMPTS))
+        if (( _KC_TG_REMAINING > 0 )); then
+          warn "Bot token doesn't match expected format (digits:alphanumerics, e.g. 123456789:AA-...). ${_KC_TG_REMAINING} attempt(s) left. Press Enter or type 'skip' to skip."
+        else
+          warn "Bot token invalid after ${_KC_TG_MAX} attempts. Skipping Telegram setup."
+          KIROCREW_TG_BOT_TOKEN=""
+        fi
+      done
+
+      # --- User ID: retry loop, all-digit (Telegram user IDs are 32-bit+ ints) ---
+      if [[ -n "$KIROCREW_TG_BOT_TOKEN" ]]; then
+        _KC_TG_ATTEMPTS=0
+        while (( _KC_TG_ATTEMPTS < _KC_TG_MAX )); do
+          _KC_TG_ATTEMPTS=$((_KC_TG_ATTEMPTS + 1))
+          _KC_TG_INPUT=""
+          prompt "Your Telegram user ID (numeric)" _KC_TG_INPUT ""
+          _KC_TG_INPUT_LC="$(printf '%s' "$_KC_TG_INPUT" | tr '[:upper:]' '[:lower:]')"
+          if [[ -z "$_KC_TG_INPUT" ]] || [[ "$_KC_TG_INPUT_LC" == "skip" ]]; then
+            KIROCREW_TG_USER_ID=""
+            KIROCREW_TG_BOT_TOKEN=""  # neither goes without both
+            break
+          fi
+          if [[ "$_KC_TG_INPUT" =~ ^[0-9]{5,15}$ ]]; then
+            KIROCREW_TG_USER_ID="$_KC_TG_INPUT"
+            break
+          fi
+          _KC_TG_REMAINING=$((_KC_TG_MAX - _KC_TG_ATTEMPTS))
+          if (( _KC_TG_REMAINING > 0 )); then
+            warn "User ID must be all digits (5-15 chars). ${_KC_TG_REMAINING} attempt(s) left. Press Enter or type 'skip' to skip."
+          else
+            warn "User ID invalid after ${_KC_TG_MAX} attempts. Skipping Telegram setup."
+            KIROCREW_TG_USER_ID=""
+            KIROCREW_TG_BOT_TOKEN=""
+          fi
+        done
+      fi
+      unset _KC_TG_ATTEMPTS _KC_TG_MAX _KC_TG_INPUT _KC_TG_INPUT_LC _KC_TG_REMAINING
+
+      if [[ -n "$KIROCREW_TG_BOT_TOKEN" && -n "$KIROCREW_TG_USER_ID" ]]; then
+        ok "Telegram setup captured (token + user ID ${KIROCREW_TG_USER_ID}); will be written to the instance during pack install."
+      else
+        info "Skipping Telegram setup — you can enable it later by editing ~/.kiro/crew/config.json on the instance."
+      fi
+    fi
+  fi
+
   # Pack-specific: kiro-cli/kirocrew interactive API key for headless mode
   if [[ "${PACK_NAME:-}" == "kiro-cli" || "${PACK_NAME:-}" == "kirocrew" ]]; then
     if [[ -z "${KIRO_FROM_SECRET:-}" && "$AUTO_YES" != true ]]; then
