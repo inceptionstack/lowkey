@@ -331,6 +331,54 @@ else
 fi
 install_aws_toolkit_skills "${PACK_SKILLS_DIR}"
 
+# Step 6b: Playwright CLI + Chromium (headless browser for agent tasks)
+# KiroCrew agents can drive a browser via Playwright — pre-install the CLI
+# globally and the Chromium browser + system deps NOW so the agent doesn't
+# have to bootstrap on first use (which would need sudo, which the gateway
+# process can't do). Artifacts:
+#   - @playwright/cli   → global npm (available on PATH as playwright-cli)
+#   - Chromium browser  → ~/.cache/ms-playwright/chromium-*/
+#   - System deps       → /usr/{lib,share} (via dnf, needs sudo)
+step "Installing Playwright CLI + Chromium"
+if command -v npm >/dev/null 2>&1; then
+  # 1. Install the CLI globally into the current user's npm prefix (which
+  #    mise/nvm places on PATH under ~/.local/... or similar).
+  if npm install -g @playwright/cli@latest 2>&1 | while IFS= read -r line; do log "  npm: ${line}"; done; then
+    if command -v playwright-cli >/dev/null 2>&1; then
+      ok "@playwright/cli installed: $(playwright-cli --version 2>/dev/null || echo unknown)"
+
+      # Ensure the kirocrew-gateway systemd unit can resolve playwright-cli.
+      # The unit's PATH is hardcoded to /home/ec2-user/.local/bin:/usr/local/bin:
+      # /usr/bin:/bin (see resources/kirocrew-gateway.service) and does NOT
+      # activate mise, so the mise-managed npm prefix isn't on the unit's PATH.
+      # Symlink the binary into ~/.local/bin, which the unit already includes.
+      _pw_bin="$(command -v playwright-cli)"
+      _pw_link_dir="${HOME:-/home/ec2-user}/.local/bin"
+      mkdir -p "${_pw_link_dir}"
+      ln -sfn "${_pw_bin}" "${_pw_link_dir}/playwright-cli"
+      ok "Symlinked ${_pw_link_dir}/playwright-cli -> ${_pw_bin} (for kirocrew-gateway systemd unit PATH)"
+
+      # 2. Install Chromium + system deps. --with-deps invokes sudo to install
+      #    system libraries via the OS package manager (dnf on AL2023).
+      #    Chromium binary goes to ~/.cache/ms-playwright/ (per-user cache,
+      #    which is what the kirocrew-gateway process reads since it runs
+      #    as ec2-user).
+      log "Installing Chromium browser + system dependencies (may take 1-3 minutes)..."
+      if playwright-cli install-browser --with-deps 2>&1 | while IFS= read -r line; do log "  playwright: ${line}"; done; then
+        ok "Chromium browser installed under ~/.cache/ms-playwright/"
+      else
+        warn "playwright-cli install-browser failed — agent can retry on first use, but may need sudo for --with-deps (non-fatal)"
+      fi
+    else
+      warn "@playwright/cli installed but 'playwright-cli' not on PATH; skipping browser install"
+    fi
+  else
+    warn "npm install -g @playwright/cli failed — playwright unavailable (non-fatal)"
+  fi
+else
+  warn "npm not on PATH — skipping Playwright CLI install (Kiro CLI setup should have provisioned Node)"
+fi
+
 # ══════════════════════════════════════════════════════════════════════════════
 # PHASE 2: KiroCrew Layer
 # ══════════════════════════════════════════════════════════════════════════════
