@@ -3036,8 +3036,9 @@ show_complete() {
   echo ""
   echo -e "$info_block" | $GUM style --foreground 255 --padding "1 2" --margin "0 2"
   echo ""
-  echo -e "$next_block" | $GUM style --border rounded --border-foreground 82 \
-    --foreground 117 --bold --padding "1 2" --margin "0 2"
+  # No border on the next-steps block: URLs and commands need to be easy to
+  # copy without the box side rails breaking word-wrap or triple-click select.
+  echo -e "$next_block" | $GUM style --foreground 117 --bold --padding "1 2" --margin "0 2"
   echo ""
 
   # Try to copy connect command to clipboard
