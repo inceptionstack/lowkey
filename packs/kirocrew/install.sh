@@ -34,6 +34,7 @@ PACK_ARG_EXTRAS="$(pack_config_get extras "aws,voice")"
 PACK_ARG_GATEWAY_PORT="$(pack_config_get gateway-port "5476")"
 PACK_ARG_START_GATEWAY="$(pack_config_get start-gateway "true")"
 PACK_ARG_KIROCREW_HOME="$(pack_config_get kirocrew-home "")"
+PACK_ARG_PROFILE="$(pack_config_get profile "")"
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 usage() {
@@ -591,9 +592,16 @@ fi
 #
 # Config key: agent.sandbox (loader.py:1352, enum=["auto","off"])
 # Default is "auto" (user namespace sandbox enabled on Linux).
+#
+# Read profile from PACK_CONFIG (via pack_config_get). PROFILE_NAME env var
+# is NOT forwarded through the sudo boundary in deploy/bootstrap.sh (only
+# PACK_CONFIG is preserved), so the pack must go through pack_config_get.
 KIROCREW_CFG_DIR="${KIROCREW_HOME:-${HOME}/.kiro/crew}"
-if [[ "${PROFILE_NAME:-}" == "builder" ]]; then
+if [[ "${PACK_ARG_PROFILE:-}" == "builder" ]]; then
   step "Configuring agent sandbox (builder profile — disabling namespace sandbox)"
+  # KIRO_USER may not be set yet (step 5 only sets it inside the API-key branch).
+  # Initialize with a safe default so chown below doesn't fail under set -u.
+  KIRO_USER="${KIRO_USER:-ec2-user}"
   mkdir -p "${KIROCREW_CFG_DIR}"
   # Merge into config.local.json using jq so we don't clobber other local overrides
   local_cfg="${KIROCREW_CFG_DIR}/config.local.json"
