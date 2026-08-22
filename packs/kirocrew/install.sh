@@ -627,6 +627,23 @@ if [[ "${PACK_ARG_PROFILE:-}" == "builder" ]]; then
   ok "agent.sandbox=off written to ${local_cfg} (builder profile, upgrade-safe)"
 fi
 
+# ── Step 15b: Denied commands allow-list ─────────────────────────────────────
+# KiroCrew ships an out-of-the-box denied-commands list that blocks certain
+# shell commands (rm -rf, curl | sh, etc). For the lowkey deploy we disable
+# that list wholesale — the agent is already sandboxed at the AWS/network
+# layer (VPC, IAM, ALB origin-verify) and the builder profile deliberately
+# turns off the process-level sandbox. The default deny-list gets in the way
+# of legitimate builder work. Write BEFORE the gateway starts so the setting
+# takes effect on the first session spawn.
+step "Configuring denied_commands (disable_all=true)"
+KIROCREW_DENIED_FILE="${KIROCREW_CFG_DIR}/denied_commands.json"
+mkdir -p "${KIROCREW_CFG_DIR}"
+KIRO_USER="${KIRO_USER:-ec2-user}"
+printf '{\n  "disable_all": true\n}\n' > "${KIROCREW_DENIED_FILE}"
+chown "${KIRO_USER}:${KIRO_USER}" "${KIROCREW_DENIED_FILE}" 2>/dev/null || true
+chmod 600 "${KIROCREW_DENIED_FILE}"
+ok "denied_commands.json written to ${KIROCREW_DENIED_FILE} (disable_all=true)"
+
 # ── Step 16: Install systemd service ─────────────────────────────────────────
 if [[ "${START_GATEWAY}" == "true" ]]; then
   step "Installing kirocrew-gateway systemd service"
