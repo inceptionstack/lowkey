@@ -347,6 +347,17 @@ if command -v npm >/dev/null 2>&1; then
     if command -v playwright-cli >/dev/null 2>&1; then
       ok "@playwright/cli installed: $(playwright-cli --version 2>/dev/null || echo unknown)"
 
+      # Ensure the kirocrew-gateway systemd unit can resolve playwright-cli.
+      # The unit's PATH is hardcoded to /home/ec2-user/.local/bin:/usr/local/bin:
+      # /usr/bin:/bin (see resources/kirocrew-gateway.service) and does NOT
+      # activate mise, so the mise-managed npm prefix isn't on the unit's PATH.
+      # Symlink the binary into ~/.local/bin, which the unit already includes.
+      _pw_bin="$(command -v playwright-cli)"
+      _pw_link_dir="${HOME:-/home/ec2-user}/.local/bin"
+      mkdir -p "${_pw_link_dir}"
+      ln -sfn "${_pw_bin}" "${_pw_link_dir}/playwright-cli"
+      ok "Symlinked ${_pw_link_dir}/playwright-cli -> ${_pw_bin} (for kirocrew-gateway systemd unit PATH)"
+
       # 2. Install Chromium + system deps. --with-deps invokes sudo to install
       #    system libraries via the OS package manager (dnf on AL2023).
       #    Chromium binary goes to ~/.cache/ms-playwright/ (per-user cache,
