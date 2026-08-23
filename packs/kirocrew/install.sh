@@ -334,89 +334,79 @@ fi
 install_aws_toolkit_skills "${PACK_SKILLS_DIR}"
 
 # Step 6b: Playwright CLI + Chromium (headless browser for agent tasks)
-# KiroCrew agents can drive a browser via Playwright — pre-install the CLI
-# globally and the Chromium browser + system deps NOW so the agent doesn't
-# have to bootstrap on first use (which would need sudo, which the gateway
-# process can't do). Artifacts:
-#   - @playwright/cli   → global npm (available on PATH as playwright-cli)
-#   - Chromium browser  → ~/.cache/ms-playwright/chromium-*/
-#   - System deps       → /usr/{lib,share} (via dnf, needs sudo)
+#
+# Root-cause fixes (Roy directive 2026-08-23):
+#  1. PLAYWRIGHT_BROWSERS_PATH -> ~/.local/share/ms-playwright (always writable
+#     under ProtectSystem=strict + ProtectHome=read-write). CLI daemon dir also
+#     lands here. Previously ~/.cache/ms-playwright was read-only at runtime.
+#  2. Pin @playwright/cli + playwright runner to matching versions so browser
+#     revision numbers never drift (@playwright/cli@0.1.18 bundles core 1.63.0-alpha-2026-08-05).
+#  3. Install 'chromium' explicitly — the CLI defaults to the 'chrome' channel
+#     binary at /opt/google/chrome/chrome which is uninstallable without sudo.
+#  4. Ship ~/.playwright/cli.config.json pinning browserName=chromium +
+#     --no-sandbox so no agent invocation needs --browser or --config flags.
+#  5. No install-deps: ldd on AL2023 aarch64 shows zero unresolved deps.
+#  6. Provision-time verification under the exact gateway env — fail visibly.
 step "Installing Playwright CLI + Chromium"
 if command -v npm >/dev/null 2>&1; then
-  # 1. Install the CLI globally into the current user's npm prefix (which
-  #    mise/nvm places on PATH under ~/.local/... or similar).
-  if npm install -g @playwright/cli@latest 2>&1 | while IFS= read -r line; do log "  npm: ${line}"; done; then
-    if command -v playwright-cli >/dev/null 2>&1; then
-      ok "@playwright/cli installed: $(playwright-cli --version 2>/dev/null || echo unknown)"
+  _PW_CLI_VERSION="0.1.18"
+  _PW_CORE_VERSION="1.63.0-alpha-2026-08-05"
+  _PW_BROWSERS_PATH="${HOME:-/home/ec2-user}/.local/share/ms-playwright"
+  _PW_CONFIG_DIR="${HOME:-/home/ec2-user}/.playwright"
+  _PW_LINK_DIR="${HOME:-/home/ec2-user}/.local/bin"
 
-      # Ensure the kirocrew-gateway systemd unit can resolve BOTH playwright-cli
-      # AND its node runtime. playwright-cli's launcher uses `#!/usr/bin/env node`,
-      # so a symlink of the launcher alone isn't enough — node itself lives under
-      # mise and isn't on the unit's PATH by default. Two-layer fix:
-      #   (a) The unit's PATH now includes ~/.local/share/mise/shims (see
-      #       resources/kirocrew-gateway.service), so mise-managed node + npm
-      #       binaries resolve at service runtime.
-      #   (b) As a belt-and-suspenders (in case shim generation lags or the
-      #       user's mise layout differs), symlink node + playwright-cli into
-      #       ~/.local/bin which the unit's PATH also includes.
-      _pw_bin="$(command -v playwright-cli)"
-      _node_bin="$(command -v node 2>/dev/null || true)"
-      _pw_link_dir="${HOME:-/home/ec2-user}/.local/bin"
-      mkdir -p "${_pw_link_dir}"
-      ln -sfn "${_pw_bin}" "${_pw_link_dir}/playwright-cli"
-      if [[ -n "${_node_bin}" ]]; then
-        ln -sfn "${_node_bin}" "${_pw_link_dir}/node"
-        ok "Symlinked ${_pw_link_dir}/{playwright-cli,node} for kirocrew-gateway systemd unit PATH"
-      else
-        warn "node binary not found on PATH at install time — gateway will rely on mise shims dir"
-      fi
+  # 1. Install the CLI globally (version-pinned).
+  if npm install -g "@playwright/cli@${_PW_CLI_VERSION}" 2>&1 | while IFS= read -r line; do log "  npm: ${line}"; done; then
+    ok "@playwright/cli@${_PW_CLI_VERSION} installed"
+  else
+    warn "npm install -g @playwright/cli@${_PW_CLI_VERSION} failed — playwright unavailable (non-fatal)"
+  fi
 
-      # 2. Install Chromium system dependencies via dnf (AL2023 ARM64).
-      #    Playwright's built-in `--with-deps` only supports apt-get, so on
-      #    AL2023 we install the required libraries explicitly, then run
-      #    `install-browser` WITHOUT `--with-deps` (browser binary only).
-      #    Package list derived from Playwright's Linux dependency map for
-      #    Chromium, translated to the AL2023 package names.
-      log "Installing Chromium system dependencies via dnf (AL2023 ARM64)..."
-      _chromium_deps=(
-        nss
-        nspr
-        atk
-        at-spi2-atk
-        cups-libs
-        libdrm
-        libxkbcommon
-        libXcomposite
-        libXdamage
-        libXfixes
-        libXrandr
-        mesa-libgbm
-        alsa-lib
-        pango
-        cairo
-      )
-      if sudo dnf install -y "${_chromium_deps[@]}" 2>&1 | while IFS= read -r line; do log "  dnf: ${line}"; done; then
-        ok "Chromium system dependencies installed"
-      else
-        warn "dnf install for Chromium deps failed — browser install may still succeed if libs pre-exist (non-fatal)"
-      fi
-
-      log "Installing Chromium browser binary (may take 1-3 minutes)..."
-      if playwright-cli install-browser chromium 2>&1 | while IFS= read -r line; do log "  playwright: ${line}"; done; then
-        ok "Chromium browser installed under ~/.cache/ms-playwright/"
-      else
-        warn "playwright-cli install-browser failed — agent can retry on first use (non-fatal)"
-      fi
+  if command -v playwright-cli >/dev/null 2>&1; then
+    # 2. Symlink playwright-cli + node into ~/.local/bin (on the unit's PATH).
+    _pw_bin="$(command -v playwright-cli)"
+    _node_bin="$(command -v node 2>/dev/null || true)"
+    mkdir -p "${_PW_LINK_DIR}"
+    ln -sfn "${_pw_bin}" "${_PW_LINK_DIR}/playwright-cli"
+    if [[ -n "${_node_bin}" ]]; then
+      ln -sfn "${_node_bin}" "${_PW_LINK_DIR}/node"
+      ok "Symlinked ${_PW_LINK_DIR}/{playwright-cli,node} for kirocrew-gateway unit PATH"
     else
-      warn "@playwright/cli installed but 'playwright-cli' not on PATH; skipping browser install"
+      warn "node not found at install time — unit will rely on mise shims dir in PATH"
+    fi
+
+    # 3. Install Chromium + ffmpeg into the writable registry path.
+    #    Use the playwright runner pinned to the same core version.
+    log "Installing Chromium + ffmpeg into ${_PW_BROWSERS_PATH} (may take 1-3 minutes)..."
+    mkdir -p "${_PW_BROWSERS_PATH}"
+    if PLAYWRIGHT_BROWSERS_PATH="${_PW_BROWSERS_PATH}" \
+        npx --yes "playwright@${_PW_CORE_VERSION}" install chromium ffmpeg \
+        2>&1 | while IFS= read -r line; do log "  playwright: ${line}"; done; then
+      ok "Chromium + ffmpeg installed under ${_PW_BROWSERS_PATH}"
+    else
+      warn "playwright install failed — agent browser use will not work (non-fatal install, fatal at runtime)"
+    fi
+
+    # 4. Ship global cli.config.json: browserName=chromium, --no-sandbox.
+    mkdir -p "${_PW_CONFIG_DIR}"
+    cp "${SCRIPT_DIR}/resources/playwright-cli.config.json" "${_PW_CONFIG_DIR}/cli.config.json"
+    ok "Installed ${_PW_CONFIG_DIR}/cli.config.json (browserName=chromium, --no-sandbox)"
+
+    # 5. Provision-time verification under the exact env the gateway unit exports.
+    log "Verifying playwright-cli under gateway env..."
+    if PLAYWRIGHT_BROWSERS_PATH="${_PW_BROWSERS_PATH}" playwright-cli --version >/dev/null 2>&1; then
+      ok "playwright-cli verified OK: $(PLAYWRIGHT_BROWSERS_PATH="${_PW_BROWSERS_PATH}" playwright-cli --version 2>/dev/null)"
+    else
+      warn "playwright-cli --version failed under gateway env — browser use will fail at runtime"
     fi
   else
-    warn "npm install -g @playwright/cli failed — playwright unavailable (non-fatal)"
+    warn "playwright-cli not on PATH after install — skipping browser install and config"
   fi
+
+  unset _PW_CLI_VERSION _PW_CORE_VERSION _PW_BROWSERS_PATH _PW_CONFIG_DIR _PW_LINK_DIR _pw_bin _node_bin
 else
   warn "npm not on PATH — skipping Playwright CLI install (Kiro CLI setup should have provisioned Node)"
 fi
-
 # ══════════════════════════════════════════════════════════════════════════════
 # PHASE 2: KiroCrew Layer
 # ══════════════════════════════════════════════════════════════════════════════
@@ -810,6 +800,8 @@ if [[ "${START_GATEWAY}" == "true" ]]; then
   KIROCREW_DATA_HOME="${KIROCREW_HOME:-${HOME}/.kiro/crew}"
   SERVICE_SRC="${SCRIPT_DIR}/resources/kirocrew-gateway.service"
   SERVICE_DST="/etc/systemd/system/kirocrew-gateway.service"
+  SERVICE_DROPIN_SRC="${SCRIPT_DIR}/resources/kirocrew-gateway.service.d/10-playwright.conf"
+  SERVICE_DROPIN_DIR="/etc/systemd/system/kirocrew-gateway.service.d"
 
   if [[ ! -f "${SERVICE_SRC}" ]]; then
     warn "Service template not found: ${SERVICE_SRC} — skipping"
@@ -822,6 +814,22 @@ if [[ "${START_GATEWAY}" == "true" ]]; then
 
     sudo cp /tmp/kirocrew-gateway.service "${SERVICE_DST}"
     rm -f /tmp/kirocrew-gateway.service
+
+    # Install the Playwright / gh-auth drop-in (Roy directive 2026-08-23 08:27):
+    # ProtectHome=read-write for the agent's normal $HOME writes, plus explicit
+    # ReadWritePaths for ~/.cache and ~/.config (belt-and-suspenders in case a
+    # future ProtectHome tightening removes the blanket rw), plus
+    # PLAYWRIGHT_BROWSERS_PATH env so the CLI's daemon dir + browser payloads
+    # live under a stable writable path. Additive across drop-ins for
+    # ReadWritePaths=; ProtectHome= is replaced (not additive).
+    if [[ -f "${SERVICE_DROPIN_SRC}" ]]; then
+      sudo mkdir -p "${SERVICE_DROPIN_DIR}"
+      sudo cp "${SERVICE_DROPIN_SRC}" "${SERVICE_DROPIN_DIR}/10-playwright.conf"
+      ok "Installed drop-in: ${SERVICE_DROPIN_DIR}/10-playwright.conf (ProtectHome=read-write + Playwright registry)"
+    else
+      warn "Drop-in not found: ${SERVICE_DROPIN_SRC} — Playwright will hit the read-only-\$HOME failure at runtime"
+    fi
+
     sudo systemctl daemon-reload
     sudo systemctl enable kirocrew-gateway.service
     if sudo systemctl start kirocrew-gateway.service; then
