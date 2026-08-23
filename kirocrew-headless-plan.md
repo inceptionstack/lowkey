@@ -1,5 +1,11 @@
 # KiroCrew: Add Kiro CLI API Key Prompt (Port from main)
 
+> **Superseded in part by PR #99.** The `"Press Enter to skip"` line in the snippet
+> below, and the skip-on-empty-input branch it describes, were removed: the Kiro API
+> key and the Telegram bot token / user ID are now required fields once their prompt
+> is reached. See `install.sh` for the implemented flow. The snippets here are the
+> original design record, not current code.
+
 ## Overview
 
 Port the interactive Kiro API key prompt (already on `main` for the `kiro-cli` pack) into the `feat/kirocrew-pack` branch so that kirocrew users also get headless mode configured during install.

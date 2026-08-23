@@ -37,9 +37,35 @@ show_debug_locations() {
   fi
 }
 
-# Ctrl-C: kill background jobs and exit immediately
+# Secret-bearing temp files, registered so an interrupt can shred them.
+# Newline-delimited string rather than an array: this script runs under
+# `set -u` and on bash 3.2, where expanding an empty array is an error.
+# mktemp paths never contain newlines, so the delimiter is safe.
+_SECRET_TMP_FILES=""
+
+register_secret_tmpfile() {
+  _SECRET_TMP_FILES="${_SECRET_TMP_FILES}${1}"$'\n'
+}
+
+purge_secret_tmpfiles() {
+  if [[ -z "${_SECRET_TMP_FILES:-}" ]]; then
+    return 0
+  fi
+  local f
+  while IFS= read -r f; do
+    if [[ -n "$f" ]]; then
+      rm -f "$f" 2>/dev/null || true
+    fi
+  done <<< "$_SECRET_TMP_FILES"
+  _SECRET_TMP_FILES=""
+}
+
+# Ctrl-C: shred secret temp files, kill background jobs and exit immediately
 cleanup_on_interrupt() {
   echo -e "\n\033[0;31m✗ Interrupted\033[0m" >&2
+  # Shred first: `kill -- -$$` below can take this shell down with the group,
+  # and a plaintext token must not outlive the installer in /tmp.
+  purge_secret_tmpfiles
   # Kill all child processes (gum, tee, etc.)
   kill -- -$$ 2>/dev/null || kill 0 2>/dev/null
   exit 130
@@ -49,6 +75,7 @@ trap cleanup_on_interrupt INT TERM
 # Always show debug info on non-zero exit (EXIT trap is more reliable than ERR)
 trap '
   exit_code=$?
+  purge_secret_tmpfiles
   if [[ $exit_code -ne 0 ]]; then
     echo -e "\n\033[0;31m✗ Installer failed (exit code $exit_code)\033[0m" >&2
     show_debug_locations
@@ -3628,6 +3655,7 @@ main() {
     local kc_tg_token_file
     kc_tg_token_file=$(mktemp /tmp/lowkey-kc-tg-token.XXXXXX)
     chmod 600 "$kc_tg_token_file"
+    register_secret_tmpfile "$kc_tg_token_file"
     printf '%s' "$KIROCREW_TG_BOT_TOKEN" > "$kc_tg_token_file"
     # Restore if in pending-deletion state (same guard as Roundhouse).
     aws secretsmanager restore-secret --secret-id "$_KC_TG_SECRET_NAME" --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
@@ -3660,6 +3688,7 @@ main() {
     local token_file
     token_file=$(mktemp /tmp/lowkey-rh-token.XXXXXX)
     chmod 600 "$token_file"
+    register_secret_tmpfile "$token_file"
     printf '%s' "$_RH_BOT_TOKEN" > "$token_file"
     # Restore if in pending-deletion state
     aws secretsmanager restore-secret --secret-id "$_RH_SECRET_NAME" --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
@@ -3689,6 +3718,7 @@ main() {
     local kiro_key_file
     kiro_key_file=$(mktemp /tmp/lowkey-kiro-key.XXXXXX)
     chmod 600 "$kiro_key_file"
+    register_secret_tmpfile "$kiro_key_file"
     printf '%s' "$_KIRO_API_KEY" > "$kiro_key_file"
     # Restore if in pending-deletion state
     aws secretsmanager restore-secret --secret-id "$_KIRO_SECRET_NAME" --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
