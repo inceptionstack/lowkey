@@ -3389,54 +3389,40 @@ run_config_and_review() {
       echo -e "     your number (e.g. ${DIM}123456789${NC}). That's the only account your"
       echo -e "     bot will answer."
       echo ""
-      echo -e "  ${DIM}Press Enter (empty) or type 'skip' at either prompt to skip Telegram setup.${NC}"
-      echo ""
-
-      # --- Bot token: retry loop, format ^[0-9]+:[A-Za-z0-9_-]+$ ---
+      # --- Bot token: required once user opted in ---
       _KC_TG_ATTEMPTS=0
       _KC_TG_MAX=5
       while (( _KC_TG_ATTEMPTS < _KC_TG_MAX )); do
         _KC_TG_ATTEMPTS=$((_KC_TG_ATTEMPTS + 1))
         _KC_TG_INPUT=""
         prompt_secret "Telegram bot token" _KC_TG_INPUT ""
-        _KC_TG_INPUT_LC="$(printf '%s' "$_KC_TG_INPUT" | tr '[:upper:]' '[:lower:]')"
-        if [[ -z "$_KC_TG_INPUT" ]] || [[ "$_KC_TG_INPUT_LC" == "skip" ]]; then
-          KIROCREW_TG_BOT_TOKEN=""
-          break
-        fi
         if [[ "$_KC_TG_INPUT" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]; then
-          KIROCREW_TG_BOT_TOKEN="$_KC_TG_INPUT"
+          KIROCREW_TG_BOT_TOKEN="***"
           break
         fi
         _KC_TG_REMAINING=$((_KC_TG_MAX - _KC_TG_ATTEMPTS))
         if (( _KC_TG_REMAINING > 0 )); then
-          warn "Bot token doesn't match expected format (digits:alphanumerics, e.g. 123456789:AA-...). ${_KC_TG_REMAINING} attempt(s) left. Press Enter or type 'skip' to skip."
+          warn "Bot token must match format digits:alphanumerics (e.g. 123456789:AA-...). ${_KC_TG_REMAINING} attempt(s) left."
         else
           warn "Bot token invalid after ${_KC_TG_MAX} attempts. Skipping Telegram setup."
           KIROCREW_TG_BOT_TOKEN=""
         fi
       done
 
-      # --- User ID: retry loop, all-digit (Telegram user IDs are 32-bit+ ints) ---
+      # --- User ID: required, no skip once bot token is captured ---
       if [[ -n "$KIROCREW_TG_BOT_TOKEN" ]]; then
         _KC_TG_ATTEMPTS=0
         while (( _KC_TG_ATTEMPTS < _KC_TG_MAX )); do
           _KC_TG_ATTEMPTS=$((_KC_TG_ATTEMPTS + 1))
           _KC_TG_INPUT=""
-          prompt "Your Telegram user ID (numeric)" _KC_TG_INPUT ""
-          _KC_TG_INPUT_LC="$(printf '%s' "$_KC_TG_INPUT" | tr '[:upper:]' '[:lower:]')"
-          if [[ -z "$_KC_TG_INPUT" ]] || [[ "$_KC_TG_INPUT_LC" == "skip" ]]; then
-            KIROCREW_TG_USER_ID=""
-            KIROCREW_TG_BOT_TOKEN=""  # neither goes without both
-            break
-          fi
+          prompt "Your Telegram user ID (numeric, required)" _KC_TG_INPUT ""
           if [[ "$_KC_TG_INPUT" =~ ^[0-9]{5,15}$ ]]; then
             KIROCREW_TG_USER_ID="$_KC_TG_INPUT"
             break
           fi
           _KC_TG_REMAINING=$((_KC_TG_MAX - _KC_TG_ATTEMPTS))
           if (( _KC_TG_REMAINING > 0 )); then
-            warn "User ID must be all digits (5-15 chars). ${_KC_TG_REMAINING} attempt(s) left. Press Enter or type 'skip' to skip."
+            warn "User ID must be digits only, 5-15 chars. ${_KC_TG_REMAINING} attempt(s) left."
           else
             warn "User ID invalid after ${_KC_TG_MAX} attempts. Skipping Telegram setup."
             KIROCREW_TG_USER_ID=""
@@ -3473,40 +3459,28 @@ run_config_and_review() {
   if [[ "${PACK_NAME:-}" == "kiro-cli" || "${PACK_NAME:-}" == "kirocrew" ]]; then
     if [[ -z "${KIRO_FROM_SECRET:-}" && "$AUTO_YES" != true ]]; then
       echo ""
-      echo -e "  ${BOLD}Kiro CLI supports headless mode (no browser login).${NC}"
-      echo -e "  Create an API key at: ${CYAN}https://app.kiro.dev/settings/api-keys${NC}"
+      echo -e "  ${BOLD}Kiro API key is required for headless (no browser login).${NC}"
+      echo -e "  Create one at: ${CYAN}https://app.kiro.dev/settings/api-keys${NC}"
       echo -e "  (Your organization must have API keys enabled.)"
       echo ""
-      echo -e "  Press Enter (empty input) or type 'skip' to skip and authenticate via browser later."
-      echo ""
       _KIRO_API_KEY=""
-      # Retry loop: allow user to correct format mistakes without losing the step.
-      # Skip conditions: empty input, or literal 'skip' typed, or user cancels the
-      # gum prompt (Esc / Ctrl-C returns non-zero and prompt_secret falls back to
-      # the default "" — which we treat as skip).
+      # Required — no skip. Loop until a valid ksk_... key is entered.
       _KIRO_ATTEMPTS=0
       _KIRO_MAX_ATTEMPTS=5
       while (( _KIRO_ATTEMPTS < _KIRO_MAX_ATTEMPTS )); do
         _KIRO_ATTEMPTS=$((_KIRO_ATTEMPTS + 1))
         _KIRO_INPUT=""
-        prompt_secret "Kiro API key" _KIRO_INPUT ""
-        # Skip: empty input, or user typed "skip" (case-insensitive, Bash 3-safe)
+        prompt_secret "Kiro API key (required)" _KIRO_INPUT ""
         _KIRO_INPUT_LC="$(printf '%s' "$_KIRO_INPUT" | tr '[:upper:]' '[:lower:]')"
-        if [[ -z "$_KIRO_INPUT" ]] || [[ "$_KIRO_INPUT_LC" == "skip" ]]; then
-          _KIRO_API_KEY=""
-          break
-        fi
-        # Validate format: ksk_<alphanumeric>, ~35 chars
         if [[ "$_KIRO_INPUT" =~ ^ksk_[A-Za-z0-9]{26,96}$ ]]; then
-          _KIRO_API_KEY="$_KIRO_INPUT"
+          _KIRO_API_KEY="***"
           break
         fi
-        # Invalid format — warn and re-prompt
         _KIRO_REMAINING=$((_KIRO_MAX_ATTEMPTS - _KIRO_ATTEMPTS))
         if (( _KIRO_REMAINING > 0 )); then
-          warn "API key doesn't match expected format (ksk_... followed by 26-96 alphanumeric chars). ${_KIRO_REMAINING} attempt(s) left. Press Enter or type 'skip' to skip."
+          warn "API key must start with ksk_ followed by 26-96 alphanumeric chars. ${_KIRO_REMAINING} attempt(s) left."
         else
-          warn "API key doesn't match expected format after ${_KIRO_MAX_ATTEMPTS} attempts. Skipping — authenticate manually after install."
+          warn "API key invalid after ${_KIRO_MAX_ATTEMPTS} attempts. Skipping — authenticate manually after install."
           _KIRO_API_KEY=""
         fi
       done
