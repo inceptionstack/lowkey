@@ -1894,6 +1894,13 @@ Resources:
           # Export all params as env vars for the bootstrap script
           export ACCT_ID="${AWS::AccountId}"
           export REGION="${AWS::Region}"
+          # STACK_REGION is the CFN stack / deployment region — preserved
+          # separately from BEDROCK_REGION and from bootstrap.sh's --region
+          # (which is repurposed for the Bedrock region on Bedrock-model deploys).
+          # Used by resolvers that must hit AWS APIs in the same region where
+          # the installer created resources (e.g. Secrets Manager for the
+          # KiroCrew Telegram bot token). Codex P1 on 79c93b6.
+          export STACK_REGION="${AWS::Region}"
           export STACK_NAME="${AWS::StackName}"
           export DEFAULT_MODEL="${DefaultModel}"
           export BEDROCK_REGION="${BedrockRegion}"

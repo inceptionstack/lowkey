@@ -279,10 +279,31 @@ fi
 # arn/id through the CFN parameter + UserData. Resolve it here before the
 # pack-config JSON is built so the pack side keeps a single plaintext code
 # path (telegram-bot-token) regardless of how the token was supplied.
+#
+# Region source-of-truth (Codex P1 on 79c93b6):
+#   The installer creates the secret in the CFN STACK region (DEPLOY_REGION),
+#   but bootstrap.sh's --region flag carries the BEDROCK region — which is
+#   pinned to us-east-1 whenever the deploy region is outside the Bedrock
+#   allowlist (e.g. ap-south-1). So we MUST NOT use $REGION here.
+#   Order of preference:
+#     1) STACK_REGION exported by UserData (authoritative).
+#     2) IMDSv2 placement/region (works on any EC2, exact stack region).
+#     3) AWS_DEFAULT_REGION as a last resort.
+#     4) REGION (Bedrock region) only if nothing else is available — same
+#        behavior as before, kept so single-region deployments in the
+#        Bedrock allowlist still work when UserData is skipped (dev/manual).
 if [[ -z "${KIROCREW_TG_BOT_TOKEN:-}" && -n "${KIROCREW_TG_BOT_TOKEN_SECRET:-}" ]]; then
-  # Instance role has secretsmanager:GetSecretValue on this specific secret;
-  # region auto-detected from IMDS if AWS_DEFAULT_REGION isn't already set.
-  _kc_tg_region="${REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
+  _kc_tg_region="${STACK_REGION:-}"
+  if [[ -z "$_kc_tg_region" ]]; then
+    _kc_imds_token="$(curl -sf -X PUT http://169.254.169.254/latest/api/token \
+        -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' 2>/dev/null || true)"
+    if [[ -n "$_kc_imds_token" ]]; then
+      _kc_tg_region="$(curl -sf -H "X-aws-ec2-metadata-token: ${_kc_imds_token}" \
+          http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null || true)"
+    fi
+    unset _kc_imds_token
+  fi
+  _kc_tg_region="${_kc_tg_region:-${AWS_DEFAULT_REGION:-${REGION:-us-east-1}}}"
   _kc_tg_resolved="$(aws secretsmanager get-secret-value \
       --secret-id "${KIROCREW_TG_BOT_TOKEN_SECRET}" \
       --query SecretString --output text \
@@ -290,7 +311,7 @@ if [[ -z "${KIROCREW_TG_BOT_TOKEN:-}" && -n "${KIROCREW_TG_BOT_TOKEN_SECRET:-}" 
   if [[ -n "${_kc_tg_resolved}" ]]; then
     KIROCREW_TG_BOT_TOKEN="${_kc_tg_resolved}"
   else
-    echo "WARN: could not resolve KirocrewTgBotTokenSecret (${KIROCREW_TG_BOT_TOKEN_SECRET}) — pack will skip Telegram wiring" >&2
+    echo "WARN: could not resolve KirocrewTgBotTokenSecret (${KIROCREW_TG_BOT_TOKEN_SECRET}) in region ${_kc_tg_region} — pack will skip Telegram wiring" >&2
   fi
   unset _kc_tg_resolved _kc_tg_region
 fi
