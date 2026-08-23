@@ -347,27 +347,63 @@ if command -v npm >/dev/null 2>&1; then
     if command -v playwright-cli >/dev/null 2>&1; then
       ok "@playwright/cli installed: $(playwright-cli --version 2>/dev/null || echo unknown)"
 
-      # Ensure the kirocrew-gateway systemd unit can resolve playwright-cli.
-      # The unit's PATH is hardcoded to /home/ec2-user/.local/bin:/usr/local/bin:
-      # /usr/bin:/bin (see resources/kirocrew-gateway.service) and does NOT
-      # activate mise, so the mise-managed npm prefix isn't on the unit's PATH.
-      # Symlink the binary into ~/.local/bin, which the unit already includes.
+      # Ensure the kirocrew-gateway systemd unit can resolve BOTH playwright-cli
+      # AND its node runtime. playwright-cli's launcher uses `#!/usr/bin/env node`,
+      # so a symlink of the launcher alone isn't enough — node itself lives under
+      # mise and isn't on the unit's PATH by default. Two-layer fix:
+      #   (a) The unit's PATH now includes ~/.local/share/mise/shims (see
+      #       resources/kirocrew-gateway.service), so mise-managed node + npm
+      #       binaries resolve at service runtime.
+      #   (b) As a belt-and-suspenders (in case shim generation lags or the
+      #       user's mise layout differs), symlink node + playwright-cli into
+      #       ~/.local/bin which the unit's PATH also includes.
       _pw_bin="$(command -v playwright-cli)"
+      _node_bin="$(command -v node 2>/dev/null || true)"
       _pw_link_dir="${HOME:-/home/ec2-user}/.local/bin"
       mkdir -p "${_pw_link_dir}"
       ln -sfn "${_pw_bin}" "${_pw_link_dir}/playwright-cli"
-      ok "Symlinked ${_pw_link_dir}/playwright-cli -> ${_pw_bin} (for kirocrew-gateway systemd unit PATH)"
+      if [[ -n "${_node_bin}" ]]; then
+        ln -sfn "${_node_bin}" "${_pw_link_dir}/node"
+        ok "Symlinked ${_pw_link_dir}/{playwright-cli,node} for kirocrew-gateway systemd unit PATH"
+      else
+        warn "node binary not found on PATH at install time — gateway will rely on mise shims dir"
+      fi
 
-      # 2. Install Chromium + system deps. --with-deps invokes sudo to install
-      #    system libraries via the OS package manager (dnf on AL2023).
-      #    Chromium binary goes to ~/.cache/ms-playwright/ (per-user cache,
-      #    which is what the kirocrew-gateway process reads since it runs
-      #    as ec2-user).
-      log "Installing Chromium browser + system dependencies (may take 1-3 minutes)..."
-      if playwright-cli install-browser --with-deps 2>&1 | while IFS= read -r line; do log "  playwright: ${line}"; done; then
+      # 2. Install Chromium system dependencies via dnf (AL2023 ARM64).
+      #    Playwright's built-in `--with-deps` only supports apt-get, so on
+      #    AL2023 we install the required libraries explicitly, then run
+      #    `install-browser` WITHOUT `--with-deps` (browser binary only).
+      #    Package list derived from Playwright's Linux dependency map for
+      #    Chromium, translated to the AL2023 package names.
+      log "Installing Chromium system dependencies via dnf (AL2023 ARM64)..."
+      _chromium_deps=(
+        nss
+        nspr
+        atk
+        at-spi2-atk
+        cups-libs
+        libdrm
+        libxkbcommon
+        libXcomposite
+        libXdamage
+        libXfixes
+        libXrandr
+        mesa-libgbm
+        alsa-lib
+        pango
+        cairo
+      )
+      if sudo dnf install -y "${_chromium_deps[@]}" 2>&1 | while IFS= read -r line; do log "  dnf: ${line}"; done; then
+        ok "Chromium system dependencies installed"
+      else
+        warn "dnf install for Chromium deps failed — browser install may still succeed if libs pre-exist (non-fatal)"
+      fi
+
+      log "Installing Chromium browser binary (may take 1-3 minutes)..."
+      if playwright-cli install-browser chromium 2>&1 | while IFS= read -r line; do log "  playwright: ${line}"; done; then
         ok "Chromium browser installed under ~/.cache/ms-playwright/"
       else
-        warn "playwright-cli install-browser failed — agent can retry on first use, but may need sudo for --with-deps (non-fatal)"
+        warn "playwright-cli install-browser failed — agent can retry on first use (non-fatal)"
       fi
     else
       warn "@playwright/cli installed but 'playwright-cli' not on PATH; skipping browser install"
