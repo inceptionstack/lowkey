@@ -998,7 +998,10 @@ confirm() {
   if [[ "$default" == "default_yes" ]]; then
     $GUM confirm --default=yes "$text" < /dev/tty || rc=$?
   else
-    $GUM confirm "$text" < /dev/tty || rc=$?
+    # --default=no is REQUIRED, not redundant: gum's --default is a bool that
+    # defaults to true, so omitting it preselects Yes and silently inverts every
+    # default_no prompt.
+    $GUM confirm --default=no "$text" < /dev/tty || rc=$?
   fi
   [[ $rc -eq 130 ]] && { echo ""; cleanup_on_interrupt; }
   return $rc
@@ -1014,7 +1017,7 @@ toggle() {
   if [[ "$default" == "true" ]]; then
     $GUM confirm --default=yes "  $text" < /dev/tty || rc=$?
   else
-    $GUM confirm "  $text" < /dev/tty || rc=$?
+    $GUM confirm --default=no "  $text" < /dev/tty || rc=$?
   fi
   [[ $rc -eq 0 ]] && printf -v "$var" '%s' "true" || printf -v "$var" '%s' "false"
 }
