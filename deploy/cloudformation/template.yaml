@@ -26,6 +26,8 @@ Metadata:
           - KiroFromSecret
           - TelegramBotTokenSecret
           - TelegramUser
+          - KirocrewTgBotTokenSecret
+          - KirocrewTgUserId
           - Primary
           - DailyDriver
           - CodexModel
@@ -271,6 +273,17 @@ Parameters:
     Type: String
     Default: ''
     Description: "Telegram username for bot pairing (roundhouse pack only, without @ prefix)."
+
+  KirocrewTgBotTokenSecret:
+    Type: String
+    Default: ''
+    Description: "AWS Secrets Manager secret id/arn holding the KiroCrew Telegram bot token (kirocrew pack only). The instance resolves the secret at bootstrap time via its IAM role — the token itself is never embedded in UserData."
+
+  KirocrewTgUserId:
+    Type: String
+    Default: ''
+    Description: "KiroCrew Telegram numeric user ID (kirocrew pack only). Opt-in wiring. Digits only. Not sensitive (same class as TelegramUser)."
+
 
   Primary:
     Type: String
@@ -811,6 +824,32 @@ Resources:
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
         - !If [IsBuilder, 'arn:aws:iam::aws:policy/AdministratorAccess', !Ref 'AWS::NoValue']
         - !If [IsAccountAssistant, 'arn:aws:iam::aws:policy/ReadOnlyAccess', !Ref 'AWS::NoValue']
+      Policies:
+        # KiroCrew Telegram bot-token secret read access.
+        # Inline on the role (not a sibling AWS::IAM::Policy) so it is
+        # attached at role creation — the Instance's DependsOn InstanceProfile
+        # is then sufficient and there is no race between UserData starting
+        # and the permission propagating (Codex P1 on 818c0f8).
+        #
+        # Installer always passes a plain secret name in the form
+        # /lowkey/<env>/kirocrew-telegram-bot-token, so the Resource is a
+        # single well-formed ARN built via !Sub — never mix a plain name
+        # with a pre-built ARN (Codex P1 on 818c0f8: doing both produced
+        # arn:...:secret:arn:aws:... which is malformed).
+        #
+        # Empty parameter → empty policy statement action; harmless because
+        # the resource pattern won't match anything, but the statement is
+        # present on the role so no follow-up IAM propagation is required.
+        - PolicyName: !Sub '${EnvironmentName}-kirocrew-tg-secret-read'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ReadKirocrewTelegramBotToken
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${KirocrewTgBotTokenSecret}*'
       Tags:
         - Key: Name
           Value: !Sub '${EnvironmentName}-role'
@@ -881,7 +920,13 @@ Resources:
             Action:
               - secretsmanager:GetSecretValue
               - secretsmanager:GetResourcePolicy
-            Resource: '*'
+            NotResource:
+              # Bootstrap needs to read the KiroCrew Telegram bot-token secret
+              # (installer-managed, plain name /lowkey/<env>/kirocrew-telegram-bot-token)
+              # even under account_assistant. Explicit Deny always wins over the
+              # matching Allow on InstanceRole, so exempt this one ARN pattern
+              # via NotResource (Codex P1 on 818c0f8).
+              - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${KirocrewTgBotTokenSecret}*'
           - Sid: DenyS3ObjectAccess
             Effect: Deny
             Action:
@@ -1849,6 +1894,13 @@ Resources:
           # Export all params as env vars for the bootstrap script
           export ACCT_ID="${AWS::AccountId}"
           export REGION="${AWS::Region}"
+          # STACK_REGION is the CFN stack / deployment region — preserved
+          # separately from BEDROCK_REGION and from bootstrap.sh's --region
+          # (which is repurposed for the Bedrock region on Bedrock-model deploys).
+          # Used by resolvers that must hit AWS APIs in the same region where
+          # the installer created resources (e.g. Secrets Manager for the
+          # KiroCrew Telegram bot token). Codex P1 on 79c93b6.
+          export STACK_REGION="${AWS::Region}"
           export STACK_NAME="${AWS::StackName}"
           export DEFAULT_MODEL="${DefaultModel}"
           export BEDROCK_REGION="${BedrockRegion}"
@@ -1861,6 +1913,8 @@ Resources:
           export KIRO_FROM_SECRET="${KiroFromSecret}"
           export TELEGRAM_BOT_TOKEN_SECRET="${TelegramBotTokenSecret}"
           export TELEGRAM_USER="${TelegramUser}"
+          export KIROCREW_TG_BOT_TOKEN_SECRET="${KirocrewTgBotTokenSecret}"
+          export KIROCREW_TG_USER_ID="${KirocrewTgUserId}"
           export PACK_NAME="${PackName}"
           export PROFILE_NAME="${ProfileName}"
           # Publish failure to SSM and signal CFN on any error
@@ -1905,6 +1959,8 @@ Resources:
             --kiro-from-secret "$KIRO_FROM_SECRET" \
             --telegram-bot-token-secret "$TELEGRAM_BOT_TOKEN_SECRET" \
             --telegram-user "$TELEGRAM_USER" \
+            --kirocrew-tg-bot-token-secret "$KIROCREW_TG_BOT_TOKEN_SECRET" \
+            --kirocrew-tg-user-id "$KIROCREW_TG_USER_ID" \
             --primary "${Primary}" \
             --daily-driver "${DailyDriver}" \
             --codex-model "${CodexModel}"

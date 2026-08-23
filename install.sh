@@ -2390,7 +2390,7 @@ collect_security_config() {
 # Parameter source-of-truth: single mapping for CFN Console and CFN CLI
 # ============================================================================
 # ⚠ KEEP THESE TWO ARRAYS IN SYNC — same order, same count
-PARAM_CFN_NAMES=(EnvironmentName PackName ProfileName InstanceType DefaultModel ModelMode BedrockRegion LokiWatermark EnableBedrockForm EnableSecurityHub EnableGuardDuty EnableInspector EnableAccessAnalyzer EnableConfigRecorder ExistingVpcId ExistingSubnetId ExistingSubnetId2 RepoBranch KiroFromSecret TelegramBotTokenSecret TelegramUser Primary DailyDriver CodexModel EnableWebUIAuth WebUIAdminEmail EdgeLambdaVersionArn EdgeConfigSecretName EdgeConfigSecretArn SigningKeySecretName SigningKeySecretArn)
+PARAM_CFN_NAMES=(EnvironmentName PackName ProfileName InstanceType DefaultModel ModelMode BedrockRegion LokiWatermark EnableBedrockForm EnableSecurityHub EnableGuardDuty EnableInspector EnableAccessAnalyzer EnableConfigRecorder ExistingVpcId ExistingSubnetId ExistingSubnetId2 RepoBranch KiroFromSecret TelegramBotTokenSecret TelegramUser Primary DailyDriver CodexModel EnableWebUIAuth WebUIAdminEmail EdgeLambdaVersionArn EdgeConfigSecretName EdgeConfigSecretArn SigningKeySecretName SigningKeySecretArn KirocrewTgBotTokenSecret KirocrewTgUserId)
 PARAM_VALUES=()  # populated by build_deploy_params()
 
 # Per-pack default model (passed to CFN DefaultModel / bootstrap.sh --model).
@@ -2457,6 +2457,8 @@ build_deploy_params() {
     "${EDGE_CONFIG_SECRET_ARN:-}"
     "${SIGNING_KEY_SECRET_NAME:-}"
     "${SIGNING_KEY_SECRET_ARN:-}"
+    "${KIROCREW_TG_BOT_TOKEN_SECRET:-}"
+    "${KIROCREW_TG_USER_ID:-}"
   )
   # Validate parallel arrays are in sync
   [[ ${#PARAM_CFN_NAMES[@]} -eq ${#PARAM_VALUES[@]} ]] \
@@ -3364,6 +3366,109 @@ run_config_and_review() {
     build_deploy_params
   fi
 
+  # Pack-specific: kirocrew Telegram channel setup
+  # Prompts the operator for a bot token + numeric user ID, both with retry
+  # loops that accept 'skip' or empty input to bail. Values flow to the pack
+  # via PACK_CONFIG (bootstrap.sh -> pack_config_get), which then writes:
+  #   - bot token  -> ~/.kiro/crew/.env  (as TELEGRAM_BOT_TOKEN=...)
+  #   - user ID    -> ~/.kiro/crew/config.json  ('telegram.allowed_user_ids')
+  #   - enabled    -> ~/.kiro/crew/config.json  ('telegram.enabled' = true)
+  # Both writes are gated on both values being present.
+  KIROCREW_TG_BOT_TOKEN=""
+  KIROCREW_TG_BOT_TOKEN_SECRET=""
+  KIROCREW_TG_USER_ID=""
+  if [[ "${PACK_NAME:-}" == "kirocrew" && "$AUTO_YES" != true ]]; then
+    if confirm "Connect KiroCrew to Telegram? (chat with your agent from your phone)" "default_no"; then
+      echo ""
+      echo -e "  ${BOLD}Two things to get from Telegram before continuing:${NC}"
+      echo ""
+      echo -e "  1. ${BOLD}Create a bot${NC} — message ${CYAN}@BotFather${NC}, send ${BOLD}/newbot${NC},"
+      echo -e "     and follow the prompts. You'll get a token like ${DIM}123456789:AA…${NC}"
+      echo ""
+      echo -e "  2. ${BOLD}Find your user ID${NC} — message ${CYAN}@userinfobot${NC}; it replies with"
+      echo -e "     your number (e.g. ${DIM}123456789${NC}). That's the only account your"
+      echo -e "     bot will answer."
+      echo ""
+      echo -e "  ${DIM}Press Enter (empty) or type 'skip' at either prompt to skip Telegram setup.${NC}"
+      echo ""
+
+      # --- Bot token: retry loop, format ^[0-9]+:[A-Za-z0-9_-]+$ ---
+      _KC_TG_ATTEMPTS=0
+      _KC_TG_MAX=5
+      while (( _KC_TG_ATTEMPTS < _KC_TG_MAX )); do
+        _KC_TG_ATTEMPTS=$((_KC_TG_ATTEMPTS + 1))
+        _KC_TG_INPUT=""
+        prompt_secret "Telegram bot token" _KC_TG_INPUT ""
+        _KC_TG_INPUT_LC="$(printf '%s' "$_KC_TG_INPUT" | tr '[:upper:]' '[:lower:]')"
+        if [[ -z "$_KC_TG_INPUT" ]] || [[ "$_KC_TG_INPUT_LC" == "skip" ]]; then
+          KIROCREW_TG_BOT_TOKEN=""
+          break
+        fi
+        if [[ "$_KC_TG_INPUT" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]; then
+          KIROCREW_TG_BOT_TOKEN="$_KC_TG_INPUT"
+          break
+        fi
+        _KC_TG_REMAINING=$((_KC_TG_MAX - _KC_TG_ATTEMPTS))
+        if (( _KC_TG_REMAINING > 0 )); then
+          warn "Bot token doesn't match expected format (digits:alphanumerics, e.g. 123456789:AA-...). ${_KC_TG_REMAINING} attempt(s) left. Press Enter or type 'skip' to skip."
+        else
+          warn "Bot token invalid after ${_KC_TG_MAX} attempts. Skipping Telegram setup."
+          KIROCREW_TG_BOT_TOKEN=""
+        fi
+      done
+
+      # --- User ID: retry loop, all-digit (Telegram user IDs are 32-bit+ ints) ---
+      if [[ -n "$KIROCREW_TG_BOT_TOKEN" ]]; then
+        _KC_TG_ATTEMPTS=0
+        while (( _KC_TG_ATTEMPTS < _KC_TG_MAX )); do
+          _KC_TG_ATTEMPTS=$((_KC_TG_ATTEMPTS + 1))
+          _KC_TG_INPUT=""
+          prompt "Your Telegram user ID (numeric)" _KC_TG_INPUT ""
+          _KC_TG_INPUT_LC="$(printf '%s' "$_KC_TG_INPUT" | tr '[:upper:]' '[:lower:]')"
+          if [[ -z "$_KC_TG_INPUT" ]] || [[ "$_KC_TG_INPUT_LC" == "skip" ]]; then
+            KIROCREW_TG_USER_ID=""
+            KIROCREW_TG_BOT_TOKEN=""  # neither goes without both
+            break
+          fi
+          if [[ "$_KC_TG_INPUT" =~ ^[0-9]{5,15}$ ]]; then
+            KIROCREW_TG_USER_ID="$_KC_TG_INPUT"
+            break
+          fi
+          _KC_TG_REMAINING=$((_KC_TG_MAX - _KC_TG_ATTEMPTS))
+          if (( _KC_TG_REMAINING > 0 )); then
+            warn "User ID must be all digits (5-15 chars). ${_KC_TG_REMAINING} attempt(s) left. Press Enter or type 'skip' to skip."
+          else
+            warn "User ID invalid after ${_KC_TG_MAX} attempts. Skipping Telegram setup."
+            KIROCREW_TG_USER_ID=""
+            KIROCREW_TG_BOT_TOKEN=""
+          fi
+        done
+      fi
+      unset _KC_TG_ATTEMPTS _KC_TG_MAX _KC_TG_INPUT _KC_TG_INPUT_LC _KC_TG_REMAINING
+
+      if [[ -n "$KIROCREW_TG_BOT_TOKEN" && -n "$KIROCREW_TG_USER_ID" ]]; then
+        # Codex P2 (818c0f8): defer the Secrets Manager write until AFTER
+        # show_summary confirms the deploy — same pattern Roundhouse and
+        # kiro-cli already use. Here we only stash the token in a shell var
+        # and pre-compute the secret name so build_deploy_params can emit
+        # the correct CFN parameter value; the actual create-secret /
+        # put-secret-value call happens in the post-confirmation block
+        # (search for _KC_TG_SECRET_NAME below).
+        _KC_TG_SECRET_NAME="/lowkey/${ENV_NAME}/kirocrew-telegram-bot-token"
+        KIROCREW_TG_BOT_TOKEN_SECRET="$_KC_TG_SECRET_NAME"
+        # NOTE: KIROCREW_TG_BOT_TOKEN stays populated in-memory; it is
+        # written to Secrets Manager and cleared only after the operator
+        # confirms deployment.
+        ok "Telegram setup captured (secret ${KIROCREW_TG_BOT_TOKEN_SECRET} + user ID ${KIROCREW_TG_USER_ID}); token will be stored after you confirm deployment."
+        # Rebuild PARAM_VALUES so the KirocrewTg* fields are no longer stale
+        # (Codex P1 on 4c9d1fd: build_deploy_params ran before this wizard).
+        build_deploy_params
+      else
+        info "Skipping Telegram setup — you can enable it later by editing ~/.kiro/crew/config.json on the instance."
+      fi
+    fi
+  fi
+
   # Pack-specific: kiro-cli/kirocrew interactive API key for headless mode
   if [[ "${PACK_NAME:-}" == "kiro-cli" || "${PACK_NAME:-}" == "kirocrew" ]]; then
     if [[ -z "${KIRO_FROM_SECRET:-}" && "$AUTO_YES" != true ]]; then
@@ -3504,6 +3609,41 @@ main() {
   run_config_and_review  # steps 2-4 (config → review)
   _telem_pack_selected 2>/dev/null || true
   _telem_method_selected 2>/dev/null || true
+
+  # KiroCrew Telegram: save bot token to Secrets Manager (deferred until after user confirmation)
+  # Codex P2 on 818c0f8: the wizard used to write this before show_summary,
+  # which orphaned a secret if the operator cancelled at the summary or
+  # chose "Change settings". Matches the Roundhouse + Kiro API-key pattern.
+  if [[ -n "${KIROCREW_TG_BOT_TOKEN:-}" && -n "${_KC_TG_SECRET_NAME:-}" ]]; then
+    info "Storing KiroCrew Telegram bot token in Secrets Manager: ${_KC_TG_SECRET_NAME}"
+    local kc_tg_token_file
+    kc_tg_token_file=$(mktemp /tmp/lowkey-kc-tg-token.XXXXXX)
+    chmod 600 "$kc_tg_token_file"
+    printf '%s' "$KIROCREW_TG_BOT_TOKEN" > "$kc_tg_token_file"
+    # Restore if in pending-deletion state (same guard as Roundhouse).
+    aws secretsmanager restore-secret --secret-id "$_KC_TG_SECRET_NAME" --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
+    local kc_tg_sm_err=""
+    if kc_tg_sm_err=$(aws secretsmanager create-secret \
+        --name "$_KC_TG_SECRET_NAME" \
+        --secret-string "file://${kc_tg_token_file}" \
+        --description "KiroCrew Telegram bot token for ${ENV_NAME} (managed by lowkey install.sh)" \
+        --tags "Key=loki:managed,Value=true" "Key=loki:pack,Value=kirocrew" "Key=loki:env,Value=${ENV_NAME}" \
+        --region "$DEPLOY_REGION" 2>&1); then
+      ok "KiroCrew Telegram token saved to Secrets Manager"
+    elif kc_tg_sm_err=$(aws secretsmanager put-secret-value \
+        --secret-id "$_KC_TG_SECRET_NAME" \
+        --secret-string "file://${kc_tg_token_file}" \
+        --region "$DEPLOY_REGION" 2>&1); then
+      ok "KiroCrew Telegram token updated in Secrets Manager"
+    else
+      rm -f "$kc_tg_token_file"
+      fail "Failed to save KiroCrew Telegram bot token to Secrets Manager: ${kc_tg_sm_err}"
+    fi
+    rm -f "$kc_tg_token_file"
+    # Scrub the plaintext token from installer state — CFN only needs the arn/id.
+    KIROCREW_TG_BOT_TOKEN=""
+    unset KIROCREW_TG_BOT_TOKEN _KC_TG_SECRET_NAME
+  fi
 
   # Roundhouse: save bot token to Secrets Manager (deferred until after user confirmation)
   if [[ -n "${_RH_BOT_TOKEN:-}" && -n "${_RH_SECRET_NAME:-}" ]]; then
