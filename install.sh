@@ -2390,7 +2390,7 @@ collect_security_config() {
 # Parameter source-of-truth: single mapping for CFN Console and CFN CLI
 # ============================================================================
 # ⚠ KEEP THESE TWO ARRAYS IN SYNC — same order, same count
-PARAM_CFN_NAMES=(EnvironmentName PackName ProfileName InstanceType DefaultModel ModelMode BedrockRegion LokiWatermark EnableBedrockForm EnableSecurityHub EnableGuardDuty EnableInspector EnableAccessAnalyzer EnableConfigRecorder ExistingVpcId ExistingSubnetId ExistingSubnetId2 RepoBranch KiroFromSecret TelegramBotTokenSecret TelegramUser Primary DailyDriver CodexModel EnableWebUIAuth WebUIAdminEmail EdgeLambdaVersionArn EdgeConfigSecretName EdgeConfigSecretArn SigningKeySecretName SigningKeySecretArn KirocrewTgBotToken KirocrewTgUserId)
+PARAM_CFN_NAMES=(EnvironmentName PackName ProfileName InstanceType DefaultModel ModelMode BedrockRegion LokiWatermark EnableBedrockForm EnableSecurityHub EnableGuardDuty EnableInspector EnableAccessAnalyzer EnableConfigRecorder ExistingVpcId ExistingSubnetId ExistingSubnetId2 RepoBranch KiroFromSecret TelegramBotTokenSecret TelegramUser Primary DailyDriver CodexModel EnableWebUIAuth WebUIAdminEmail EdgeLambdaVersionArn EdgeConfigSecretName EdgeConfigSecretArn SigningKeySecretName SigningKeySecretArn KirocrewTgBotTokenSecret KirocrewTgUserId)
 PARAM_VALUES=()  # populated by build_deploy_params()
 
 # Per-pack default model (passed to CFN DefaultModel / bootstrap.sh --model).
@@ -2457,7 +2457,7 @@ build_deploy_params() {
     "${EDGE_CONFIG_SECRET_ARN:-}"
     "${SIGNING_KEY_SECRET_NAME:-}"
     "${SIGNING_KEY_SECRET_ARN:-}"
-    "${KIROCREW_TG_BOT_TOKEN:-}"
+    "${KIROCREW_TG_BOT_TOKEN_SECRET:-}"
     "${KIROCREW_TG_USER_ID:-}"
   )
   # Validate parallel arrays are in sync
@@ -3375,6 +3375,7 @@ run_config_and_review() {
   #   - enabled    -> ~/.kiro/crew/config.json  ('telegram.enabled' = true)
   # Both writes are gated on both values being present.
   KIROCREW_TG_BOT_TOKEN=""
+  KIROCREW_TG_BOT_TOKEN_SECRET=""
   KIROCREW_TG_USER_ID=""
   if [[ "${PACK_NAME:-}" == "kirocrew" && "$AUTO_YES" != true ]]; then
     if confirm "Connect KiroCrew to Telegram? (chat with your agent from your phone)" "default_no"; then
@@ -3446,7 +3447,34 @@ run_config_and_review() {
       unset _KC_TG_ATTEMPTS _KC_TG_MAX _KC_TG_INPUT _KC_TG_INPUT_LC _KC_TG_REMAINING
 
       if [[ -n "$KIROCREW_TG_BOT_TOKEN" && -n "$KIROCREW_TG_USER_ID" ]]; then
-        ok "Telegram setup captured (token + user ID ${KIROCREW_TG_USER_ID}); will be written to the instance during pack install."
+        # Persist the bot token to Secrets Manager *before* the stack sees it,
+        # so the CloudFormation parameter can be a plaintext arn/id and the
+        # token itself never lands in the resolved EC2 UserData attribute
+        # (Codex P1 on 4c9d1fd: NoEcho only masks the parameter display, not
+        # ec2:DescribeInstanceAttribute --attribute userData).
+        _KC_TG_SECRET_NAME="/lowkey/${ENV_NAME}/kirocrew-telegram-bot-token"
+        log "Writing Telegram bot token to Secrets Manager: ${_KC_TG_SECRET_NAME}"
+        if aws secretsmanager describe-secret --secret-id "$_KC_TG_SECRET_NAME" --region "$DEPLOY_REGION" >/dev/null 2>&1; then
+          aws secretsmanager put-secret-value \
+            --secret-id "$_KC_TG_SECRET_NAME" \
+            --secret-string "$KIROCREW_TG_BOT_TOKEN" \
+            --region "$DEPLOY_REGION" >/dev/null || fail "Failed to update Telegram bot token in Secrets Manager"
+        else
+          aws secretsmanager create-secret \
+            --name "$_KC_TG_SECRET_NAME" \
+            --description "KiroCrew Telegram bot token for ${ENV_NAME} (managed by lowkey install.sh)" \
+            --secret-string "$KIROCREW_TG_BOT_TOKEN" \
+            --tags "Key=loki:managed,Value=true" "Key=loki:pack,Value=kirocrew" "Key=loki:env,Value=${ENV_NAME}" \
+            --region "$DEPLOY_REGION" >/dev/null || fail "Failed to create Telegram bot token secret in Secrets Manager"
+        fi
+        KIROCREW_TG_BOT_TOKEN_SECRET="$_KC_TG_SECRET_NAME"
+        # Drop the plaintext token from installer state — the arn is all CFN needs.
+        KIROCREW_TG_BOT_TOKEN=""
+        unset _KC_TG_SECRET_NAME
+        ok "Telegram setup captured (secret ${KIROCREW_TG_BOT_TOKEN_SECRET} + user ID ${KIROCREW_TG_USER_ID}); will be resolved on the instance during pack install."
+        # Rebuild PARAM_VALUES so the KirocrewTg* fields are no longer stale
+        # (Codex P1 on 4c9d1fd: build_deploy_params ran before this wizard).
+        build_deploy_params
       else
         info "Skipping Telegram setup — you can enable it later by editing ~/.kiro/crew/config.json on the instance."
       fi

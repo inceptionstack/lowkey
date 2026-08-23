@@ -26,7 +26,7 @@ Metadata:
           - KiroFromSecret
           - TelegramBotTokenSecret
           - TelegramUser
-          - KirocrewTgBotToken
+          - KirocrewTgBotTokenSecret
           - KirocrewTgUserId
           - Primary
           - DailyDriver
@@ -274,17 +274,15 @@ Parameters:
     Default: ''
     Description: "Telegram username for bot pairing (roundhouse pack only, without @ prefix)."
 
-  KirocrewTgBotToken:
+  KirocrewTgBotTokenSecret:
     Type: String
     Default: ''
-    NoEcho: true
-    Description: "KiroCrew Telegram bot token (kirocrew pack only). Optional opt-in wiring. Format: <digits>:<base64ish>."
+    Description: "AWS Secrets Manager secret id/arn holding the KiroCrew Telegram bot token (kirocrew pack only). The instance resolves the secret at bootstrap time via its IAM role — the token itself is never embedded in UserData."
 
   KirocrewTgUserId:
     Type: String
     Default: ''
-    NoEcho: true
-    Description: "KiroCrew Telegram numeric user ID (kirocrew pack only). Optional opt-in wiring. Digits only."
+    Description: "KiroCrew Telegram numeric user ID (kirocrew pack only). Opt-in wiring. Digits only. Not sensitive (same class as TelegramUser)."
 
 
   Primary:
@@ -467,6 +465,7 @@ Conditions:
   CreateNewVpc: !Equals [!Ref ExistingVpcId, '']
   IsBuilder: !Equals [!Ref ProfileName, 'builder']
   IsNotBuilder: !Not [!Condition IsBuilder]
+  HasKirocrewTgBotTokenSecret: !Not [!Equals [!Ref KirocrewTgBotTokenSecret, '']]
   IsAccountAssistant: !Equals [!Ref ProfileName, 'account_assistant']
   IsPersonalAssistant: !Equals [!Ref ProfileName, 'personal_assistant']
   RunSecurityServices: !Not [!Condition IsPersonalAssistant]
@@ -857,6 +856,30 @@ Resources:
             Resource:
               - !Sub 'arn:aws:ssm:*:${AWS::AccountId}:parameter/loki/*'
               - !Sub 'arn:aws:cloudformation:*:${AWS::AccountId}:stack/*'
+
+  # KiroCrew Telegram bot-token secret read access.
+  # Only granted when a secret arn/id was supplied by the installer (P1 fix:
+  # the token itself is stored in Secrets Manager and never embedded in UserData).
+  # Uses !Sub with a wildcard suffix so both plain-name and full-arn inputs
+  # resolve correctly, scoped to the account + region of this stack.
+  KirocrewTgSecretReadPolicy:
+    Type: AWS::IAM::Policy
+    Condition: HasKirocrewTgBotTokenSecret
+    Properties:
+      PolicyName: !Sub '${EnvironmentName}-kirocrew-tg-secret-read'
+      Roles:
+        - !Ref InstanceRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ReadKirocrewTelegramBotToken
+            Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+              - secretsmanager:DescribeSecret
+            Resource:
+              - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${KirocrewTgBotTokenSecret}*'
+              - !Ref KirocrewTgBotTokenSecret
 
   # Bedrock inference for account_assistant (ReadOnlyAccess does not include invoke)
   AccountAssistantBedrockPolicy:
@@ -1876,7 +1899,7 @@ Resources:
           export KIRO_FROM_SECRET="${KiroFromSecret}"
           export TELEGRAM_BOT_TOKEN_SECRET="${TelegramBotTokenSecret}"
           export TELEGRAM_USER="${TelegramUser}"
-          export KIROCREW_TG_BOT_TOKEN="${KirocrewTgBotToken}"
+          export KIROCREW_TG_BOT_TOKEN_SECRET="${KirocrewTgBotTokenSecret}"
           export KIROCREW_TG_USER_ID="${KirocrewTgUserId}"
           export PACK_NAME="${PackName}"
           export PROFILE_NAME="${ProfileName}"
@@ -1922,7 +1945,7 @@ Resources:
             --kiro-from-secret "$KIRO_FROM_SECRET" \
             --telegram-bot-token-secret "$TELEGRAM_BOT_TOKEN_SECRET" \
             --telegram-user "$TELEGRAM_USER" \
-            --kirocrew-tg-bot-token "$KIROCREW_TG_BOT_TOKEN" \
+            --kirocrew-tg-bot-token-secret "$KIROCREW_TG_BOT_TOKEN_SECRET" \
             --kirocrew-tg-user-id "$KIROCREW_TG_USER_ID" \
             --primary "${Primary}" \
             --daily-driver "${DailyDriver}" \

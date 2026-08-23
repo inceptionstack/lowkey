@@ -135,6 +135,7 @@ KIRO_FROM_SECRET=""
 TELEGRAM_BOT_TOKEN_SECRET="${TELEGRAM_BOT_TOKEN_SECRET:-}"
 TELEGRAM_USER="${TELEGRAM_USER:-}"
 KIROCREW_TG_BOT_TOKEN="${KIROCREW_TG_BOT_TOKEN:-}"
+KIROCREW_TG_BOT_TOKEN_SECRET="${KIROCREW_TG_BOT_TOKEN_SECRET:-}"
 KIROCREW_TG_USER_ID="${KIROCREW_TG_USER_ID:-}"
 
 while [[ $# -gt 0 ]]; do
@@ -227,6 +228,11 @@ while [[ $# -gt 0 ]]; do
       KIROCREW_TG_BOT_TOKEN="$2"
       shift 2
       ;;
+    --kirocrew-tg-bot-token-secret)
+      [[ $# -gt 1 ]] || { echo "ERROR: --kirocrew-tg-bot-token-secret requires a value" >&2; exit 1; }
+      KIROCREW_TG_BOT_TOKEN_SECRET="$2"
+      shift 2
+      ;;
     --kirocrew-tg-user-id)
       [[ $# -gt 1 ]] || { echo "ERROR: --kirocrew-tg-user-id requires a value" >&2; exit 1; }
       KIROCREW_TG_USER_ID="$2"
@@ -266,6 +272,27 @@ if [[ -z "$PACK_NAME" ]]; then
   echo ""
   usage
   exit 1
+fi
+
+# ── Resolve KiroCrew Telegram bot-token secret (P1 security: token never in UserData) ──
+# The installer stores the bot token in Secrets Manager and only passes the
+# arn/id through the CFN parameter + UserData. Resolve it here before the
+# pack-config JSON is built so the pack side keeps a single plaintext code
+# path (telegram-bot-token) regardless of how the token was supplied.
+if [[ -z "${KIROCREW_TG_BOT_TOKEN:-}" && -n "${KIROCREW_TG_BOT_TOKEN_SECRET:-}" ]]; then
+  # Instance role has secretsmanager:GetSecretValue on this specific secret;
+  # region auto-detected from IMDS if AWS_DEFAULT_REGION isn't already set.
+  _kc_tg_region="${REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
+  _kc_tg_resolved="$(aws secretsmanager get-secret-value \
+      --secret-id "${KIROCREW_TG_BOT_TOKEN_SECRET}" \
+      --query SecretString --output text \
+      --region "${_kc_tg_region}" 2>/dev/null || true)"
+  if [[ -n "${_kc_tg_resolved}" ]]; then
+    KIROCREW_TG_BOT_TOKEN="${_kc_tg_resolved}"
+  else
+    echo "WARN: could not resolve KirocrewTgBotTokenSecret (${KIROCREW_TG_BOT_TOKEN_SECRET}) — pack will skip Telegram wiring" >&2
+  fi
+  unset _kc_tg_resolved _kc_tg_region
 fi
 
 # ── Write pack config JSON ────────────────────────────────────────────────────
