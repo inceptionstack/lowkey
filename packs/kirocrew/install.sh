@@ -453,7 +453,14 @@ if command -v npm >/dev/null 2>&1; then
     # of failure Codex flagged: browser downloads succeed but launches die on
     # unresolved shared objects. Runs against the newest chromium-*/chrome-linux/chrome
     # under the writable browsers path.
-    _pw_chrome_bin="$(ls -td "${_PW_BROWSERS_PATH}"/chromium-*/chrome-linux/chrome 2>/dev/null | head -1)"
+    #
+    # Codex P1 on 431baf0: guard the `ls -td` under `set -e` + `pipefail`.
+    # A missing glob makes `ls` exit nonzero, which propagates through the
+    # command substitution and aborts the entire pack install — turning the
+    # explicitly non-fatal `playwright install` failure above into a fatal
+    # KiroCrew provisioning failure. Force success with `|| true` so the
+    # empty-value branch below runs as intended.
+    _pw_chrome_bin="$(ls -td "${_PW_BROWSERS_PATH}"/chromium-*/chrome-linux/chrome 2>/dev/null | head -1 || true)"
     if [[ -n "${_pw_chrome_bin}" && -x "${_pw_chrome_bin}" ]]; then
       _pw_ldd_missing="$(ldd "${_pw_chrome_bin}" 2>/dev/null | grep -c "not found" || true)"
       if [[ "${_pw_ldd_missing}" == "0" ]]; then
