@@ -3397,12 +3397,16 @@ run_config_and_review() {
         _KC_TG_INPUT=""
         prompt_secret "Telegram bot token" _KC_TG_INPUT ""
         if [[ "$_KC_TG_INPUT" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]; then
-          KIROCREW_TG_BOT_TOKEN="***"
+          KIROCREW_TG_BOT_TOKEN="$_KC_TG_INPUT"
           break
         fi
         _KC_TG_REMAINING=$((_KC_TG_MAX - _KC_TG_ATTEMPTS))
         if (( _KC_TG_REMAINING > 0 )); then
-          warn "Bot token must match format digits:alphanumerics (e.g. 123456789:AA-...). ${_KC_TG_REMAINING} attempt(s) left."
+          if [[ -z "$_KC_TG_INPUT" ]]; then
+            warn "Bot token is required and cannot be blank. ${_KC_TG_REMAINING} attempt(s) left."
+          else
+            warn "Bot token must match format digits:alphanumerics (e.g. 123456789:AA-...). ${_KC_TG_REMAINING} attempt(s) left."
+          fi
         else
           warn "Bot token invalid after ${_KC_TG_MAX} attempts. Skipping Telegram setup."
           KIROCREW_TG_BOT_TOKEN=""
@@ -3422,7 +3426,11 @@ run_config_and_review() {
           fi
           _KC_TG_REMAINING=$((_KC_TG_MAX - _KC_TG_ATTEMPTS))
           if (( _KC_TG_REMAINING > 0 )); then
-            warn "User ID must be digits only, 5-15 chars. ${_KC_TG_REMAINING} attempt(s) left."
+            if [[ -z "$_KC_TG_INPUT" ]]; then
+              warn "User ID is required and cannot be blank. ${_KC_TG_REMAINING} attempt(s) left."
+            else
+              warn "User ID must be digits only, 5-15 chars. ${_KC_TG_REMAINING} attempt(s) left."
+            fi
           else
             warn "User ID invalid after ${_KC_TG_MAX} attempts. Skipping Telegram setup."
             KIROCREW_TG_USER_ID=""
@@ -3430,7 +3438,7 @@ run_config_and_review() {
           fi
         done
       fi
-      unset _KC_TG_ATTEMPTS _KC_TG_MAX _KC_TG_INPUT _KC_TG_INPUT_LC _KC_TG_REMAINING
+      unset _KC_TG_ATTEMPTS _KC_TG_MAX _KC_TG_INPUT _KC_TG_REMAINING
 
       if [[ -n "$KIROCREW_TG_BOT_TOKEN" && -n "$KIROCREW_TG_USER_ID" ]]; then
         # Codex P2 (818c0f8): defer the Secrets Manager write until AFTER
@@ -3471,20 +3479,23 @@ run_config_and_review() {
         _KIRO_ATTEMPTS=$((_KIRO_ATTEMPTS + 1))
         _KIRO_INPUT=""
         prompt_secret "Kiro API key (required)" _KIRO_INPUT ""
-        _KIRO_INPUT_LC="$(printf '%s' "$_KIRO_INPUT" | tr '[:upper:]' '[:lower:]')"
         if [[ "$_KIRO_INPUT" =~ ^ksk_[A-Za-z0-9]{26,96}$ ]]; then
-          _KIRO_API_KEY="***"
+          _KIRO_API_KEY="$_KIRO_INPUT"
           break
         fi
         _KIRO_REMAINING=$((_KIRO_MAX_ATTEMPTS - _KIRO_ATTEMPTS))
         if (( _KIRO_REMAINING > 0 )); then
-          warn "API key must start with ksk_ followed by 26-96 alphanumeric chars. ${_KIRO_REMAINING} attempt(s) left."
+          if [[ -z "$_KIRO_INPUT" ]]; then
+            warn "API key is required and cannot be blank. ${_KIRO_REMAINING} attempt(s) left."
+          else
+            warn "API key must start with ksk_ followed by 26-96 alphanumeric chars. ${_KIRO_REMAINING} attempt(s) left."
+          fi
         else
           warn "API key invalid after ${_KIRO_MAX_ATTEMPTS} attempts. Skipping — authenticate manually after install."
           _KIRO_API_KEY=""
         fi
       done
-      unset _KIRO_INPUT _KIRO_INPUT_LC _KIRO_ATTEMPTS _KIRO_MAX_ATTEMPTS _KIRO_REMAINING
+      unset _KIRO_INPUT _KIRO_ATTEMPTS _KIRO_MAX_ATTEMPTS _KIRO_REMAINING
       if [[ -n "$_KIRO_API_KEY" ]]; then
         # Secret name determined now; actual write deferred until after user confirms
         _KIRO_SECRET_NAME="/lowkey/${ENV_NAME}/kiro-api-key"
