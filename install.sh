@@ -37,9 +37,35 @@ show_debug_locations() {
   fi
 }
 
-# Ctrl-C: kill background jobs and exit immediately
+# Secret-bearing temp files, registered so an interrupt can shred them.
+# Newline-delimited string rather than an array: this script runs under
+# `set -u` and on bash 3.2, where expanding an empty array is an error.
+# mktemp paths never contain newlines, so the delimiter is safe.
+_SECRET_TMP_FILES=""
+
+register_secret_tmpfile() {
+  _SECRET_TMP_FILES="${_SECRET_TMP_FILES}${1}"$'\n'
+}
+
+purge_secret_tmpfiles() {
+  if [[ -z "${_SECRET_TMP_FILES:-}" ]]; then
+    return 0
+  fi
+  local f
+  while IFS= read -r f; do
+    if [[ -n "$f" ]]; then
+      rm -f "$f" 2>/dev/null || true
+    fi
+  done <<< "$_SECRET_TMP_FILES"
+  _SECRET_TMP_FILES=""
+}
+
+# Ctrl-C: shred secret temp files, kill background jobs and exit immediately
 cleanup_on_interrupt() {
   echo -e "\n\033[0;31m✗ Interrupted\033[0m" >&2
+  # Shred first: `kill -- -$$` below can take this shell down with the group,
+  # and a plaintext token must not outlive the installer in /tmp.
+  purge_secret_tmpfiles
   # Kill all child processes (gum, tee, etc.)
   kill -- -$$ 2>/dev/null || kill 0 2>/dev/null
   exit 130
@@ -49,6 +75,7 @@ trap cleanup_on_interrupt INT TERM
 # Always show debug info on non-zero exit (EXIT trap is more reliable than ERR)
 trap '
   exit_code=$?
+  purge_secret_tmpfiles
   if [[ $exit_code -ne 0 ]]; then
     echo -e "\n\033[0;31m✗ Installer failed (exit code $exit_code)\033[0m" >&2
     show_debug_locations
@@ -3389,54 +3416,48 @@ run_config_and_review() {
       echo -e "     your number (e.g. ${DIM}123456789${NC}). That's the only account your"
       echo -e "     bot will answer."
       echo ""
-      echo -e "  ${DIM}Press Enter (empty) or type 'skip' at either prompt to skip Telegram setup.${NC}"
-      echo ""
-
-      # --- Bot token: retry loop, format ^[0-9]+:[A-Za-z0-9_-]+$ ---
+      # --- Bot token: required once user opted in ---
       _KC_TG_ATTEMPTS=0
       _KC_TG_MAX=5
       while (( _KC_TG_ATTEMPTS < _KC_TG_MAX )); do
         _KC_TG_ATTEMPTS=$((_KC_TG_ATTEMPTS + 1))
         _KC_TG_INPUT=""
         prompt_secret "Telegram bot token" _KC_TG_INPUT ""
-        _KC_TG_INPUT_LC="$(printf '%s' "$_KC_TG_INPUT" | tr '[:upper:]' '[:lower:]')"
-        if [[ -z "$_KC_TG_INPUT" ]] || [[ "$_KC_TG_INPUT_LC" == "skip" ]]; then
-          KIROCREW_TG_BOT_TOKEN=""
-          break
-        fi
         if [[ "$_KC_TG_INPUT" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]; then
           KIROCREW_TG_BOT_TOKEN="$_KC_TG_INPUT"
           break
         fi
         _KC_TG_REMAINING=$((_KC_TG_MAX - _KC_TG_ATTEMPTS))
         if (( _KC_TG_REMAINING > 0 )); then
-          warn "Bot token doesn't match expected format (digits:alphanumerics, e.g. 123456789:AA-...). ${_KC_TG_REMAINING} attempt(s) left. Press Enter or type 'skip' to skip."
+          if [[ -z "$_KC_TG_INPUT" ]]; then
+            warn "Bot token is required and cannot be blank. ${_KC_TG_REMAINING} attempt(s) left."
+          else
+            warn "Bot token must match format digits:alphanumerics (e.g. 123456789:AA-...). ${_KC_TG_REMAINING} attempt(s) left."
+          fi
         else
           warn "Bot token invalid after ${_KC_TG_MAX} attempts. Skipping Telegram setup."
           KIROCREW_TG_BOT_TOKEN=""
         fi
       done
 
-      # --- User ID: retry loop, all-digit (Telegram user IDs are 32-bit+ ints) ---
+      # --- User ID: required, no skip once bot token is captured ---
       if [[ -n "$KIROCREW_TG_BOT_TOKEN" ]]; then
         _KC_TG_ATTEMPTS=0
         while (( _KC_TG_ATTEMPTS < _KC_TG_MAX )); do
           _KC_TG_ATTEMPTS=$((_KC_TG_ATTEMPTS + 1))
           _KC_TG_INPUT=""
-          prompt "Your Telegram user ID (numeric)" _KC_TG_INPUT ""
-          _KC_TG_INPUT_LC="$(printf '%s' "$_KC_TG_INPUT" | tr '[:upper:]' '[:lower:]')"
-          if [[ -z "$_KC_TG_INPUT" ]] || [[ "$_KC_TG_INPUT_LC" == "skip" ]]; then
-            KIROCREW_TG_USER_ID=""
-            KIROCREW_TG_BOT_TOKEN=""  # neither goes without both
-            break
-          fi
+          prompt "Your Telegram user ID (numeric, required)" _KC_TG_INPUT ""
           if [[ "$_KC_TG_INPUT" =~ ^[0-9]{5,15}$ ]]; then
             KIROCREW_TG_USER_ID="$_KC_TG_INPUT"
             break
           fi
           _KC_TG_REMAINING=$((_KC_TG_MAX - _KC_TG_ATTEMPTS))
           if (( _KC_TG_REMAINING > 0 )); then
-            warn "User ID must be all digits (5-15 chars). ${_KC_TG_REMAINING} attempt(s) left. Press Enter or type 'skip' to skip."
+            if [[ -z "$_KC_TG_INPUT" ]]; then
+              warn "User ID is required and cannot be blank. ${_KC_TG_REMAINING} attempt(s) left."
+            else
+              warn "User ID must be digits only, 5-15 chars. ${_KC_TG_REMAINING} attempt(s) left."
+            fi
           else
             warn "User ID invalid after ${_KC_TG_MAX} attempts. Skipping Telegram setup."
             KIROCREW_TG_USER_ID=""
@@ -3444,7 +3465,7 @@ run_config_and_review() {
           fi
         done
       fi
-      unset _KC_TG_ATTEMPTS _KC_TG_MAX _KC_TG_INPUT _KC_TG_INPUT_LC _KC_TG_REMAINING
+      unset _KC_TG_ATTEMPTS _KC_TG_MAX _KC_TG_INPUT _KC_TG_REMAINING
 
       if [[ -n "$KIROCREW_TG_BOT_TOKEN" && -n "$KIROCREW_TG_USER_ID" ]]; then
         # Codex P2 (818c0f8): defer the Secrets Manager write until AFTER
@@ -3473,44 +3494,35 @@ run_config_and_review() {
   if [[ "${PACK_NAME:-}" == "kiro-cli" || "${PACK_NAME:-}" == "kirocrew" ]]; then
     if [[ -z "${KIRO_FROM_SECRET:-}" && "$AUTO_YES" != true ]]; then
       echo ""
-      echo -e "  ${BOLD}Kiro CLI supports headless mode (no browser login).${NC}"
-      echo -e "  Create an API key at: ${CYAN}https://app.kiro.dev/settings/api-keys${NC}"
+      echo -e "  ${BOLD}Kiro API key is required for headless (no browser login).${NC}"
+      echo -e "  Create one at: ${CYAN}https://app.kiro.dev/settings/api-keys${NC}"
       echo -e "  (Your organization must have API keys enabled.)"
       echo ""
-      echo -e "  Press Enter (empty input) or type 'skip' to skip and authenticate via browser later."
-      echo ""
       _KIRO_API_KEY=""
-      # Retry loop: allow user to correct format mistakes without losing the step.
-      # Skip conditions: empty input, or literal 'skip' typed, or user cancels the
-      # gum prompt (Esc / Ctrl-C returns non-zero and prompt_secret falls back to
-      # the default "" — which we treat as skip).
+      # Required — no skip. Loop until a valid ksk_... key is entered.
       _KIRO_ATTEMPTS=0
       _KIRO_MAX_ATTEMPTS=5
       while (( _KIRO_ATTEMPTS < _KIRO_MAX_ATTEMPTS )); do
         _KIRO_ATTEMPTS=$((_KIRO_ATTEMPTS + 1))
         _KIRO_INPUT=""
-        prompt_secret "Kiro API key" _KIRO_INPUT ""
-        # Skip: empty input, or user typed "skip" (case-insensitive, Bash 3-safe)
-        _KIRO_INPUT_LC="$(printf '%s' "$_KIRO_INPUT" | tr '[:upper:]' '[:lower:]')"
-        if [[ -z "$_KIRO_INPUT" ]] || [[ "$_KIRO_INPUT_LC" == "skip" ]]; then
-          _KIRO_API_KEY=""
-          break
-        fi
-        # Validate format: ksk_<alphanumeric>, ~35 chars
+        prompt_secret "Kiro API key (required)" _KIRO_INPUT ""
         if [[ "$_KIRO_INPUT" =~ ^ksk_[A-Za-z0-9]{26,96}$ ]]; then
           _KIRO_API_KEY="$_KIRO_INPUT"
           break
         fi
-        # Invalid format — warn and re-prompt
         _KIRO_REMAINING=$((_KIRO_MAX_ATTEMPTS - _KIRO_ATTEMPTS))
         if (( _KIRO_REMAINING > 0 )); then
-          warn "API key doesn't match expected format (ksk_... followed by 26-96 alphanumeric chars). ${_KIRO_REMAINING} attempt(s) left. Press Enter or type 'skip' to skip."
+          if [[ -z "$_KIRO_INPUT" ]]; then
+            warn "API key is required and cannot be blank. ${_KIRO_REMAINING} attempt(s) left."
+          else
+            warn "API key must start with ksk_ followed by 26-96 alphanumeric chars. ${_KIRO_REMAINING} attempt(s) left."
+          fi
         else
-          warn "API key doesn't match expected format after ${_KIRO_MAX_ATTEMPTS} attempts. Skipping — authenticate manually after install."
+          warn "API key invalid after ${_KIRO_MAX_ATTEMPTS} attempts. Skipping — authenticate manually after install."
           _KIRO_API_KEY=""
         fi
       done
-      unset _KIRO_INPUT _KIRO_INPUT_LC _KIRO_ATTEMPTS _KIRO_MAX_ATTEMPTS _KIRO_REMAINING
+      unset _KIRO_INPUT _KIRO_ATTEMPTS _KIRO_MAX_ATTEMPTS _KIRO_REMAINING
       if [[ -n "$_KIRO_API_KEY" ]]; then
         # Secret name determined now; actual write deferred until after user confirms
         _KIRO_SECRET_NAME="/lowkey/${ENV_NAME}/kiro-api-key"
@@ -3643,6 +3655,7 @@ main() {
     local kc_tg_token_file
     kc_tg_token_file=$(mktemp /tmp/lowkey-kc-tg-token.XXXXXX)
     chmod 600 "$kc_tg_token_file"
+    register_secret_tmpfile "$kc_tg_token_file"
     printf '%s' "$KIROCREW_TG_BOT_TOKEN" > "$kc_tg_token_file"
     # Restore if in pending-deletion state (same guard as Roundhouse).
     aws secretsmanager restore-secret --secret-id "$_KC_TG_SECRET_NAME" --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
@@ -3675,6 +3688,7 @@ main() {
     local token_file
     token_file=$(mktemp /tmp/lowkey-rh-token.XXXXXX)
     chmod 600 "$token_file"
+    register_secret_tmpfile "$token_file"
     printf '%s' "$_RH_BOT_TOKEN" > "$token_file"
     # Restore if in pending-deletion state
     aws secretsmanager restore-secret --secret-id "$_RH_SECRET_NAME" --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
@@ -3704,6 +3718,7 @@ main() {
     local kiro_key_file
     kiro_key_file=$(mktemp /tmp/lowkey-kiro-key.XXXXXX)
     chmod 600 "$kiro_key_file"
+    register_secret_tmpfile "$kiro_key_file"
     printf '%s' "$_KIRO_API_KEY" > "$kiro_key_file"
     # Restore if in pending-deletion state
     aws secretsmanager restore-secret --secret-id "$_KIRO_SECRET_NAME" --region "$DEPLOY_REGION" >/dev/null 2>&1 || true

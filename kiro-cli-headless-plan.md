@@ -1,5 +1,11 @@
 # Kiro CLI Headless API Key — Interactive Install Preference
 
+> **Superseded in part by PR #99.** The skip-on-empty-input behaviour described in
+> R3 and shown in the code snippets below was removed: the Kiro API key is now a
+> required field once the prompt is reached, validated over up to 5 attempts, with
+> no "press Enter to skip" escape. See `install.sh` for the implemented flow. The
+> snippets here are retained as the original design record, not as current code.
+
 ## Overview
 
 When a user interactively selects the **kiro-cli** pack during `install.sh`, the installer
@@ -73,11 +79,16 @@ When `-y` / `--non-interactive` is used:
 \nNo new behavior needed here; just ensure the new prompt block is gated on
 `[[ "$AUTO_YES" != true ]]`.
 
-### R3: Skip Option
+### R3: Skip Option — WITHDRAWN (PR #99)
 
-If the user presses Enter without pasting a key (empty input), the installer should:
-- Log: `"Skipping API key — you can authenticate later with: kiro-cli login --use-device-flow"`
-- Continue deployment without headless mode (existing behavior).
+~~If the user presses Enter without pasting a key (empty input), the installer should:~~
+~~Log: `"Skipping API key — you can authenticate later with: kiro-cli login --use-device-flow"`~~
+~~Continue deployment without headless mode (existing behavior).~~
+
+PR #99 removed this requirement. The key is required once the prompt is reached;
+blank input is rejected with "API key is required and cannot be blank" and costs one
+of 5 attempts. Only exhausting all 5 attempts falls through without a key, which
+exists to avoid bricking a broken session rather than as a user-facing opt-out.
 
 ### R4: manifest.yaml Update
 
