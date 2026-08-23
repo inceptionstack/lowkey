@@ -3447,31 +3447,19 @@ run_config_and_review() {
       unset _KC_TG_ATTEMPTS _KC_TG_MAX _KC_TG_INPUT _KC_TG_INPUT_LC _KC_TG_REMAINING
 
       if [[ -n "$KIROCREW_TG_BOT_TOKEN" && -n "$KIROCREW_TG_USER_ID" ]]; then
-        # Persist the bot token to Secrets Manager *before* the stack sees it,
-        # so the CloudFormation parameter can be a plaintext arn/id and the
-        # token itself never lands in the resolved EC2 UserData attribute
-        # (Codex P1 on 4c9d1fd: NoEcho only masks the parameter display, not
-        # ec2:DescribeInstanceAttribute --attribute userData).
+        # Codex P2 (818c0f8): defer the Secrets Manager write until AFTER
+        # show_summary confirms the deploy — same pattern Roundhouse and
+        # kiro-cli already use. Here we only stash the token in a shell var
+        # and pre-compute the secret name so build_deploy_params can emit
+        # the correct CFN parameter value; the actual create-secret /
+        # put-secret-value call happens in the post-confirmation block
+        # (search for _KC_TG_SECRET_NAME below).
         _KC_TG_SECRET_NAME="/lowkey/${ENV_NAME}/kirocrew-telegram-bot-token"
-        log "Writing Telegram bot token to Secrets Manager: ${_KC_TG_SECRET_NAME}"
-        if aws secretsmanager describe-secret --secret-id "$_KC_TG_SECRET_NAME" --region "$DEPLOY_REGION" >/dev/null 2>&1; then
-          aws secretsmanager put-secret-value \
-            --secret-id "$_KC_TG_SECRET_NAME" \
-            --secret-string "$KIROCREW_TG_BOT_TOKEN" \
-            --region "$DEPLOY_REGION" >/dev/null || fail "Failed to update Telegram bot token in Secrets Manager"
-        else
-          aws secretsmanager create-secret \
-            --name "$_KC_TG_SECRET_NAME" \
-            --description "KiroCrew Telegram bot token for ${ENV_NAME} (managed by lowkey install.sh)" \
-            --secret-string "$KIROCREW_TG_BOT_TOKEN" \
-            --tags "Key=loki:managed,Value=true" "Key=loki:pack,Value=kirocrew" "Key=loki:env,Value=${ENV_NAME}" \
-            --region "$DEPLOY_REGION" >/dev/null || fail "Failed to create Telegram bot token secret in Secrets Manager"
-        fi
         KIROCREW_TG_BOT_TOKEN_SECRET="$_KC_TG_SECRET_NAME"
-        # Drop the plaintext token from installer state — the arn is all CFN needs.
-        KIROCREW_TG_BOT_TOKEN=""
-        unset _KC_TG_SECRET_NAME
-        ok "Telegram setup captured (secret ${KIROCREW_TG_BOT_TOKEN_SECRET} + user ID ${KIROCREW_TG_USER_ID}); will be resolved on the instance during pack install."
+        # NOTE: KIROCREW_TG_BOT_TOKEN stays populated in-memory; it is
+        # written to Secrets Manager and cleared only after the operator
+        # confirms deployment.
+        ok "Telegram setup captured (secret ${KIROCREW_TG_BOT_TOKEN_SECRET} + user ID ${KIROCREW_TG_USER_ID}); token will be stored after you confirm deployment."
         # Rebuild PARAM_VALUES so the KirocrewTg* fields are no longer stale
         # (Codex P1 on 4c9d1fd: build_deploy_params ran before this wizard).
         build_deploy_params
@@ -3621,6 +3609,41 @@ main() {
   run_config_and_review  # steps 2-4 (config → review)
   _telem_pack_selected 2>/dev/null || true
   _telem_method_selected 2>/dev/null || true
+
+  # KiroCrew Telegram: save bot token to Secrets Manager (deferred until after user confirmation)
+  # Codex P2 on 818c0f8: the wizard used to write this before show_summary,
+  # which orphaned a secret if the operator cancelled at the summary or
+  # chose "Change settings". Matches the Roundhouse + Kiro API-key pattern.
+  if [[ -n "${KIROCREW_TG_BOT_TOKEN:-}" && -n "${_KC_TG_SECRET_NAME:-}" ]]; then
+    info "Storing KiroCrew Telegram bot token in Secrets Manager: ${_KC_TG_SECRET_NAME}"
+    local kc_tg_token_file
+    kc_tg_token_file=$(mktemp /tmp/lowkey-kc-tg-token.XXXXXX)
+    chmod 600 "$kc_tg_token_file"
+    printf '%s' "$KIROCREW_TG_BOT_TOKEN" > "$kc_tg_token_file"
+    # Restore if in pending-deletion state (same guard as Roundhouse).
+    aws secretsmanager restore-secret --secret-id "$_KC_TG_SECRET_NAME" --region "$DEPLOY_REGION" >/dev/null 2>&1 || true
+    local kc_tg_sm_err=""
+    if kc_tg_sm_err=$(aws secretsmanager create-secret \
+        --name "$_KC_TG_SECRET_NAME" \
+        --secret-string "file://${kc_tg_token_file}" \
+        --description "KiroCrew Telegram bot token for ${ENV_NAME} (managed by lowkey install.sh)" \
+        --tags "Key=loki:managed,Value=true" "Key=loki:pack,Value=kirocrew" "Key=loki:env,Value=${ENV_NAME}" \
+        --region "$DEPLOY_REGION" 2>&1); then
+      ok "KiroCrew Telegram token saved to Secrets Manager"
+    elif kc_tg_sm_err=$(aws secretsmanager put-secret-value \
+        --secret-id "$_KC_TG_SECRET_NAME" \
+        --secret-string "file://${kc_tg_token_file}" \
+        --region "$DEPLOY_REGION" 2>&1); then
+      ok "KiroCrew Telegram token updated in Secrets Manager"
+    else
+      rm -f "$kc_tg_token_file"
+      fail "Failed to save KiroCrew Telegram bot token to Secrets Manager: ${kc_tg_sm_err}"
+    fi
+    rm -f "$kc_tg_token_file"
+    # Scrub the plaintext token from installer state — CFN only needs the arn/id.
+    KIROCREW_TG_BOT_TOKEN=""
+    unset KIROCREW_TG_BOT_TOKEN _KC_TG_SECRET_NAME
+  fi
 
   # Roundhouse: save bot token to Secrets Manager (deferred until after user confirmation)
   if [[ -n "${_RH_BOT_TOKEN:-}" && -n "${_RH_SECRET_NAME:-}" ]]; then

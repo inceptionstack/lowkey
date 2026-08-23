@@ -465,7 +465,6 @@ Conditions:
   CreateNewVpc: !Equals [!Ref ExistingVpcId, '']
   IsBuilder: !Equals [!Ref ProfileName, 'builder']
   IsNotBuilder: !Not [!Condition IsBuilder]
-  HasKirocrewTgBotTokenSecret: !Not [!Equals [!Ref KirocrewTgBotTokenSecret, '']]
   IsAccountAssistant: !Equals [!Ref ProfileName, 'account_assistant']
   IsPersonalAssistant: !Equals [!Ref ProfileName, 'personal_assistant']
   RunSecurityServices: !Not [!Condition IsPersonalAssistant]
@@ -825,6 +824,32 @@ Resources:
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
         - !If [IsBuilder, 'arn:aws:iam::aws:policy/AdministratorAccess', !Ref 'AWS::NoValue']
         - !If [IsAccountAssistant, 'arn:aws:iam::aws:policy/ReadOnlyAccess', !Ref 'AWS::NoValue']
+      Policies:
+        # KiroCrew Telegram bot-token secret read access.
+        # Inline on the role (not a sibling AWS::IAM::Policy) so it is
+        # attached at role creation — the Instance's DependsOn InstanceProfile
+        # is then sufficient and there is no race between UserData starting
+        # and the permission propagating (Codex P1 on 818c0f8).
+        #
+        # Installer always passes a plain secret name in the form
+        # /lowkey/<env>/kirocrew-telegram-bot-token, so the Resource is a
+        # single well-formed ARN built via !Sub — never mix a plain name
+        # with a pre-built ARN (Codex P1 on 818c0f8: doing both produced
+        # arn:...:secret:arn:aws:... which is malformed).
+        #
+        # Empty parameter → empty policy statement action; harmless because
+        # the resource pattern won't match anything, but the statement is
+        # present on the role so no follow-up IAM propagation is required.
+        - PolicyName: !Sub '${EnvironmentName}-kirocrew-tg-secret-read'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ReadKirocrewTelegramBotToken
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${KirocrewTgBotTokenSecret}*'
       Tags:
         - Key: Name
           Value: !Sub '${EnvironmentName}-role'
@@ -856,30 +881,6 @@ Resources:
             Resource:
               - !Sub 'arn:aws:ssm:*:${AWS::AccountId}:parameter/loki/*'
               - !Sub 'arn:aws:cloudformation:*:${AWS::AccountId}:stack/*'
-
-  # KiroCrew Telegram bot-token secret read access.
-  # Only granted when a secret arn/id was supplied by the installer (P1 fix:
-  # the token itself is stored in Secrets Manager and never embedded in UserData).
-  # Uses !Sub with a wildcard suffix so both plain-name and full-arn inputs
-  # resolve correctly, scoped to the account + region of this stack.
-  KirocrewTgSecretReadPolicy:
-    Type: AWS::IAM::Policy
-    Condition: HasKirocrewTgBotTokenSecret
-    Properties:
-      PolicyName: !Sub '${EnvironmentName}-kirocrew-tg-secret-read'
-      Roles:
-        - !Ref InstanceRole
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: ReadKirocrewTelegramBotToken
-            Effect: Allow
-            Action:
-              - secretsmanager:GetSecretValue
-              - secretsmanager:DescribeSecret
-            Resource:
-              - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${KirocrewTgBotTokenSecret}*'
-              - !Ref KirocrewTgBotTokenSecret
 
   # Bedrock inference for account_assistant (ReadOnlyAccess does not include invoke)
   AccountAssistantBedrockPolicy:
@@ -919,7 +920,13 @@ Resources:
             Action:
               - secretsmanager:GetSecretValue
               - secretsmanager:GetResourcePolicy
-            Resource: '*'
+            NotResource:
+              # Bootstrap needs to read the KiroCrew Telegram bot-token secret
+              # (installer-managed, plain name /lowkey/<env>/kirocrew-telegram-bot-token)
+              # even under account_assistant. Explicit Deny always wins over the
+              # matching Allow on InstanceRole, so exempt this one ARN pattern
+              # via NotResource (Codex P1 on 818c0f8).
+              - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${KirocrewTgBotTokenSecret}*'
           - Sid: DenyS3ObjectAccess
             Effect: Deny
             Action:
