@@ -53,7 +53,12 @@ Options:
   --from-secret        Secrets Manager id/arn for Kiro API key      [default: ""]
   --channel            KiroCrew release channel                     [default: stable]
                        (stable | nightly | insider)
-  --kirocrew-version   Pin KiroCrew version                         [default: latest]
+  --kirocrew-version   Pin KiroCrew version                         [default: 0.3.0]
+                       Channel and version BOTH form the download path
+                       (cli/<channel>/<version>/cli-manifest.json), so they
+                       must be compatible. 0.3.0 was cut on the stable lane
+                       only: changing --channel without also passing a version
+                       that exists on that lane 403s and fails the install.
   --extras             Comma-separated pip extras (aws,voice)       [default: aws,voice]
   --gateway-port       KiroCrew gateway port                        [default: 5476]
   --start-gateway      Enable systemd service (true|false)          [default: true]
@@ -67,7 +72,7 @@ Post-install:
 
 Examples:
   ./install.sh --from-secret faststart/kiro-api-key
-  ./install.sh --channel nightly --extras aws,voice
+  ./install.sh --channel nightly --kirocrew-version <version-on-nightly>
   ./install.sh --start-gateway false
 EOF
 }

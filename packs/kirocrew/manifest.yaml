@@ -25,8 +25,8 @@ params:
     description: "KiroCrew release channel (stable | nightly | insider)"
     default: "stable"
   - name: kirocrew-version
-    description: "Pin KiroCrew to a specific version (leave empty for latest in channel)"
-    default: ""
+    description: "KiroCrew version passed to the upstream installer as --version. Pinned by default; an empty value does NOT float to the channel's latest, because pack_config_get falls back to the pinned default whenever the configured value is empty. Must be compatible with the channel: both values form the manifest path cli/<channel>/<version>/cli-manifest.json, and an unmatched pair (e.g. insider/0.3.0) returns 403 and fails the install."
+    default: "0.3.0"
   - name: extras
     description: "Comma-separated pip extras to install after wheel (voice, aws)"
     default: "aws,voice"
