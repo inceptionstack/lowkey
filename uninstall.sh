@@ -240,22 +240,28 @@ vpc_bpa_lifecycle() {
   local vpc_id="$1"
   local stack_name stack_vpc resources
   local stacks
-  stacks=$(aws cloudformation list-stacks \
+  if ! stacks=$(aws cloudformation list-stacks \
     --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE \
     --region "$SCAN_REGION" \
-    --query 'StackSummaries[].StackName' --output text 2>/dev/null || echo "")
+    --query 'StackSummaries[].StackName' --output text 2>/dev/null); then
+    return 2
+  fi
 
   for stack_name in $stacks; do
-    stack_vpc=$(aws cloudformation describe-stack-resources \
+    if ! stack_vpc=$(aws cloudformation describe-stack-resources \
       --stack-name "$stack_name" --region "$SCAN_REGION" \
       --query "StackResources[?ResourceType=='AWS::EC2::VPC'].PhysicalResourceId" \
-      --output text 2>/dev/null || echo "")
+      --output text 2>/dev/null); then
+      return 2
+    fi
     [[ "$stack_vpc" == "$vpc_id" ]] || continue
 
-    resources=$(aws cloudformation describe-stack-resources \
+    if ! resources=$(aws cloudformation describe-stack-resources \
       --stack-name "$stack_name" --region "$SCAN_REGION" \
       --query "StackResources[?ResourceType=='AWS::EC2::VPCBlockPublicAccessExclusion'].[LogicalResourceId,PhysicalResourceId]" \
-      --output text 2>/dev/null || echo "")
+      --output text 2>/dev/null); then
+      return 2
+    fi
     while IFS=$'\t' read -r logical_id exclusion_id; do
       case "$logical_id" in
         VpcBpaExclusion)         echo "owned:${exclusion_id:-unknown}"; return 0 ;;
@@ -292,9 +298,19 @@ vpc_has_other_lowkey_deployment() {
 warn_shared_vpc_bpa() {
   local idx="$1"
   local vpc_id="${VPC_IDS[$idx]}" selected_watermark="${WATERMARKS[$idx]}"
-  local lifecycle exclusion_id shared_status sharing_description
+  local lifecycle exclusion_id lifecycle_status shared_status sharing_description
 
-  lifecycle=$(vpc_bpa_lifecycle "$vpc_id")
+  if lifecycle=$(vpc_bpa_lifecycle "$vpc_id"); then
+    :
+  else
+    lifecycle_status=$?
+    if [[ "$lifecycle_status" -eq 2 ]]; then
+      echo ""
+      warn "Could not verify whether VPC ${vpc_id} has a stack-owned BPA exclusion."
+      warn "Treating the VPC as potentially shared; review the deployment before continuing."
+    fi
+    return 0
+  fi
   [[ "$lifecycle" == owned:* ]] || return 0
   if vpc_has_other_lowkey_deployment "$vpc_id" "$selected_watermark"; then
     shared_status=0
@@ -375,6 +391,7 @@ print_teardown_plan() {
 remove_deployment() {
   local idx="$1"
   local vpc_id="${VPC_IDS[$idx]}" watermark="${WATERMARKS[$idx]}" method="${METHODS[$idx]}"
+  local cfn_status
 
   echo ""
   echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -382,8 +399,16 @@ remove_deployment() {
   echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
   # Strategy 1: CloudFormation stack delete (CFN/SAM deploys)
-  if [[ "$method" != "terraform" ]] && try_delete_cfn_stack "$vpc_id"; then
-    ok "Deployment ${watermark} removed via CloudFormation"; return
+  if [[ "$method" != "terraform" ]]; then
+    if try_delete_cfn_stack "$vpc_id"; then
+      ok "Deployment ${watermark} removed via CloudFormation"; return
+    else
+      cfn_status=$?
+      if [[ "$cfn_status" -eq 2 ]]; then
+        warn "CloudFormation inspection failed; refusing manual cleanup for ${vpc_id}."
+        return 1
+      fi
+    fi
   fi
 
   # Strategy 2: terraform destroy (Terraform deploys with state)
@@ -404,17 +429,23 @@ remove_deployment() {
 try_delete_cfn_stack() {
   local vpc_id="$1"
   local stacks
-  stacks=$(aws cloudformation list-stacks \
+  if ! stacks=$(aws cloudformation list-stacks \
     --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE \
     --region "$SCAN_REGION" \
-    --query 'StackSummaries[*].StackName' --output text 2>/dev/null || echo "")
+    --query 'StackSummaries[*].StackName' --output text 2>/dev/null); then
+    warn "Could not inspect CloudFormation stacks for VPC ${vpc_id}; refusing to remove it."
+    return 2
+  fi
 
   for stack_name in $stacks; do
     local stack_vpc
-    stack_vpc=$(aws cloudformation describe-stack-resources \
+    if ! stack_vpc=$(aws cloudformation describe-stack-resources \
       --stack-name "$stack_name" --region "$SCAN_REGION" \
       --query "StackResources[?ResourceType=='AWS::EC2::VPC'].PhysicalResourceId" \
-      --output text 2>/dev/null || echo "")
+      --output text 2>/dev/null); then
+      warn "Could not inspect CloudFormation stack ${stack_name} for VPC ${vpc_id}; refusing to remove it."
+      return 2
+    fi
 
     [[ "$stack_vpc" == *"$vpc_id"* ]] || continue
 

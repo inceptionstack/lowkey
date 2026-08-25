@@ -35,6 +35,15 @@ assert_not_contains() {
   fi
 }
 
+assert_status() {
+  local name="$1" expected="$2" actual="$3"
+  if [[ "$actual" -eq "$expected" ]]; then
+    pass "$name"
+  else
+    fail "$name (expected exit ${expected}, got ${actual})"
+  fi
+}
+
 # Source the functions without running uninstall.sh's main entrypoint.
 # shellcheck disable=SC1090
 source <(sed '$d' "$UNINSTALL")
@@ -46,6 +55,9 @@ WATERMARKS=("target")
 aws() {
   local service="$1" operation="$2"
   case "${FAKE_SCENARIO}:${service}:${operation}" in
+    failed-lifecycle:cloudformation:list-stacks)
+      return 1
+      ;;
     shared:cloudformation:list-stacks|retained:cloudformation:list-stacks|single:cloudformation:list-stacks|failed-scan:cloudformation:list-stacks)
       printf 'stack-target\n'
       ;;
@@ -93,6 +105,16 @@ FAKE_SCENARIO=failed-scan
 output=$(warn_shared_vpc_bpa 0)
 assert_contains "failed instance scan warns instead of suppressing" "Could not verify whether VPC vpc-target has another Lowkey deployment" "$output"
 assert_contains "failed instance scan treats VPC as potentially shared" "VPC vpc-target may be shared by multiple Lowkey deployments" "$output"
+
+FAKE_SCENARIO=failed-lifecycle
+output=$(warn_shared_vpc_bpa 0)
+assert_contains "failed lifecycle scan warns instead of suppressing" "Could not verify whether VPC vpc-target has a stack-owned BPA exclusion" "$output"
+set +e
+output=$(try_delete_cfn_stack "vpc-target")
+delete_status=$?
+set -e
+assert_status "failed lifecycle scan blocks CloudFormation deletion" 2 "$delete_status"
+assert_contains "failed lifecycle deletion names refusal" "refusing to remove it" "$output"
 
 printf '\nPassed: %d  Failed: %d\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
