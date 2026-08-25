@@ -274,11 +274,13 @@ vpc_bpa_lifecycle() {
 vpc_has_other_lowkey_deployment() {
   local vpc_id="$1" selected_watermark="$2"
   local rows watermark
-  rows=$(aws ec2 describe-instances \
+  if ! rows=$(aws ec2 describe-instances \
     --filters "Name=vpc-id,Values=${vpc_id}" "Name=tag:loki:managed,Values=true" \
     --region "$SCAN_REGION" \
     --query 'Reservations[].Instances[?State.Name!=`terminated`].[InstanceId, Tags[?Key==`loki:watermark`].Value|[0]]' \
-    --output text 2>/dev/null || echo "")
+    --output text 2>/dev/null); then
+    return 2
+  fi
 
   while IFS=$'\t' read -r _ watermark; do
     [[ -z "$watermark" || "$watermark" == "None" ]] && continue
@@ -290,15 +292,31 @@ vpc_has_other_lowkey_deployment() {
 warn_shared_vpc_bpa() {
   local idx="$1"
   local vpc_id="${VPC_IDS[$idx]}" selected_watermark="${WATERMARKS[$idx]}"
-  local lifecycle exclusion_id
+  local lifecycle exclusion_id shared_status sharing_description
 
   lifecycle=$(vpc_bpa_lifecycle "$vpc_id")
   [[ "$lifecycle" == owned:* ]] || return 0
-  vpc_has_other_lowkey_deployment "$vpc_id" "$selected_watermark" || return 0
+  if vpc_has_other_lowkey_deployment "$vpc_id" "$selected_watermark"; then
+    shared_status=0
+  else
+    shared_status=$?
+  fi
+  case "$shared_status" in
+    1) return 0 ;;
+    2)
+      echo ""
+      warn "Could not verify whether VPC ${vpc_id} has another Lowkey deployment."
+      warn "Treating the VPC as shared; review the deployment before continuing."
+      sharing_description="may be shared by multiple"
+      ;;
+    *)
+      sharing_description="is shared by multiple"
+      ;;
+  esac
 
   exclusion_id="${lifecycle#owned:}"
   echo ""
-  warn "VPC ${vpc_id} is shared by multiple Lowkey deployments."
+  warn "VPC ${vpc_id} ${sharing_description} Lowkey deployments."
   echo "  Removing ${selected_watermark} may delete VPC-wide BPA exclusion ${exclusion_id}."
   echo "  Remaining deployment(s) may lose internet ingress and egress."
   echo "  Recreate an allow-bidirectional exclusion, or redeploy the remaining stack with CreateVpcBpaExclusion=true."
