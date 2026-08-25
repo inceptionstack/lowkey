@@ -1575,22 +1575,38 @@ resolve_vpc_bpa_exclusion() {
   fi
 
   local target_suffix=":vpc/${EXISTING_VPC_ID}"
-  local active_mode
-  active_mode=$(printf '%s' "$exclusions_json" | jq -r --arg suffix "$target_suffix" '
+  local exclusion_json
+  exclusion_json=$(printf '%s' "$exclusions_json" | jq -c --arg suffix "$target_suffix" '
     [.VpcBlockPublicAccessExclusions[]?
-      | select((.ResourceArn // "") | endswith($suffix))
-      | select(.State == "create-in-progress" or .State == "create-complete"
-            or .State == "update-in-progress" or .State == "update-complete")
-      | .InternetGatewayExclusionMode][0] // empty
+      | select((.ResourceArn // "") | endswith($suffix))][0] // empty
   ')
+  [[ -n "$exclusion_json" ]] || return 0
 
-  case "$active_mode" in
-    allow-bidirectional)
-      CREATE_VPC_BPA_EXCLUSION="false"
-      VPC_BPA_EXCLUSION_STATUS="already exists"
+  local exclusion_state exclusion_mode exclusion_reason
+  exclusion_state=$(printf '%s' "$exclusion_json" | jq -r '.State // "unknown"')
+  exclusion_mode=$(printf '%s' "$exclusion_json" | jq -r '.InternetGatewayExclusionMode // "unknown"')
+  exclusion_reason=$(printf '%s' "$exclusion_json" | jq -r '.Reason // empty')
+
+  case "$exclusion_state" in
+    create-complete|update-complete)
+      case "$exclusion_mode" in
+        allow-bidirectional)
+          CREATE_VPC_BPA_EXCLUSION="false"
+          VPC_BPA_EXCLUSION_STATUS="already exists"
+          ;;
+        allow-egress)
+          fail "VPC ${EXISTING_VPC_ID} has an egress-only BPA exclusion. LowKey requires allow-bidirectional so ingress can reach this VPC. Update or remove the existing exclusion, then rerun the wizard."
+          ;;
+        *)
+          fail "VPC ${EXISTING_VPC_ID} has a BPA exclusion with unsupported mode '${exclusion_mode}'. LowKey requires allow-bidirectional."
+          ;;
+      esac
       ;;
-    allow-egress)
-      fail "VPC ${EXISTING_VPC_ID} has an egress-only BPA exclusion. LowKey requires allow-bidirectional so ingress can reach this VPC. Update or remove the existing exclusion, then rerun the wizard."
+    create-in-progress|update-in-progress)
+      fail "VPC ${EXISTING_VPC_ID} has a BPA exclusion still in state '${exclusion_state}'. Wait for it to complete, then rerun the wizard so no pack starts before the exclusion is active."
+      ;;
+    *)
+      fail "VPC ${EXISTING_VPC_ID} has a BPA exclusion in unusable state '${exclusion_state}'${exclusion_reason:+: ${exclusion_reason}}. Resolve that exclusion, then rerun the wizard."
       ;;
   esac
 }
@@ -1654,13 +1670,21 @@ check_vpc_quota() {
 check_permissions() {
   echo ""
   info "Checking permissions..."
-  if aws iam simulate-principal-policy \
-    --policy-source-arn "$CALLER_ARN" \
-    --action-names "cloudformation:CreateStack" "iam:CreateRole" "ec2:CreateVpc" \
-      "ec2:CreateVpcBlockPublicAccessExclusion" "ec2:DescribeVpcBlockPublicAccessExclusions" \
-    --query 'EvaluationResults[?EvalDecision!=`allowed`].EvalActionName' \
-    --output text 2>/dev/null | grep -q "."; then
-    warn "Some permissions may be missing."
+  local denied_actions
+  if ! denied_actions=$(aws iam simulate-principal-policy \
+      --policy-source-arn "$CALLER_ARN" \
+      --action-names "cloudformation:CreateStack" "iam:CreateRole" "ec2:CreateVpc" \
+        "ec2:CreateVpcBlockPublicAccessExclusion" "ec2:DescribeVpcBlockPublicAccessExclusions" \
+        "ec2:ModifyVpcBlockPublicAccessExclusion" "ec2:DeleteVpcBlockPublicAccessExclusion" \
+      --query 'EvaluationResults[?EvalDecision!=`allowed`].EvalActionName' \
+      --output text 2>&1); then
+    warn "Could not verify deployment permissions: ${denied_actions}"
+    confirm_or_abort "Continue without verified permissions?"
+    return 0
+  fi
+
+  if [[ -n "$denied_actions" ]]; then
+    warn "Some permissions may be missing: ${denied_actions}"
     confirm_or_abort "Continue anyway?"
   else
     ok "Permissions verified"
@@ -2610,7 +2634,7 @@ show_summary() {
     summary+="Bedrock       ${BEDROCK_REGION} (cross-region inference)\n"
   fi
   [[ -n "${EXISTING_VPC_ID:-}" ]] && summary+="VPC           reuse ${EXISTING_VPC_ID}\n"
-  summary+="BPA exclusion ${VPC_BPA_EXCLUSION_STATUS:-will be created} (allows internet ingress to this VPC)\n"
+  summary+="BPA exclusion: ${VPC_BPA_EXCLUSION_STATUS:-will be created} (allows internet ingress to this VPC)\n"
   summary+="Security      ${security_summary}\n"
   summary+="Environment   ${ENV_NAME}"
 

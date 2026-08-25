@@ -74,20 +74,38 @@ JSON
 }
 test_other_vpc_exclusion_is_ignored
 
-if (
-  source "${TMPDIR}/functions.sh"
-  EXISTING_VPC_ID="vpc-0123456789abcdef0"
-  aws() {
-    cat <<'JSON'
-{"VpcBlockPublicAccessExclusions":[{"ExclusionId":"vpcbpa-excl-egress","InternetGatewayExclusionMode":"allow-egress","ResourceArn":"arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0123456789abcdef0","State":"create-complete"}]}
-JSON
-  }
-  resolve_vpc_bpa_exclusion
-) >/dev/null 2>&1; then
-  fail_test "egress-only exclusion is rejected because it does not allow ingress"
-else
-  pass "egress-only exclusion is rejected because it does not allow ingress"
-fi
+assert_reused_exclusion_rejected() {
+  local state="$1" mode="$2" description="$3" reason="${4:-}"
+  if (
+    source "${TMPDIR}/functions.sh"
+    EXISTING_VPC_ID="vpc-0123456789abcdef0"
+    aws() {
+      printf '{"VpcBlockPublicAccessExclusions":[{"ExclusionId":"vpcbpa-excl-test","InternetGatewayExclusionMode":"%s","ResourceArn":"arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0123456789abcdef0","State":"%s","Reason":"%s"}]}\n' \
+        "$mode" "$state" "$reason"
+    }
+    resolve_vpc_bpa_exclusion
+  ) >/dev/null 2>&1; then
+    fail_test "$description"
+  else
+    pass "$description"
+  fi
+}
+
+assert_reused_exclusion_rejected \
+  "create-in-progress" "allow-bidirectional" \
+  "in-progress exclusion is rejected so bootstrap cannot start early"
+assert_reused_exclusion_rejected \
+  "update-in-progress" "allow-bidirectional" \
+  "updating exclusion is rejected so bootstrap cannot start early"
+assert_reused_exclusion_rejected \
+  "create-failed" "allow-bidirectional" \
+  "failed exclusion is rejected instead of attempting a duplicate" "service rejected request"
+assert_reused_exclusion_rejected \
+  "delete-in-progress" "allow-bidirectional" \
+  "deleting exclusion is rejected instead of attempting a duplicate"
+assert_reused_exclusion_rejected \
+  "create-complete" "allow-egress" \
+  "egress-only exclusion is rejected because it does not allow ingress"
 
 if (
   source "${TMPDIR}/functions.sh"
@@ -103,10 +121,14 @@ fi
 printf '\n── Installer and CloudFormation wiring ──\n'
 summary_body="$(sed -n '/^show_summary() {/,/^}/p' "$INSTALL_SH")"
 run_config_body="$(sed -n '/^run_config_and_review() {/,/^}/p' "$INSTALL_SH")"
-assert_contains "summary shows BPA status" 'BPA exclusion ${VPC_BPA_EXCLUSION_STATUS:-will be created}' "$summary_body"
+permissions_body="$(sed -n '/^check_permissions() {/,/^}/p' "$INSTALL_SH")"
+assert_contains "summary shows exact BPA status label" 'BPA exclusion: ${VPC_BPA_EXCLUSION_STATUS:-will be created}' "$summary_body"
 assert_contains "summary explains ingress effect" 'allows internet ingress to this VPC' "$summary_body"
 assert_contains "config resolves BPA before review" 'resolve_vpc_bpa_exclusion' "$run_config_body"
 assert_contains "installer passes BPA creation parameter" 'CreateVpcBpaExclusion' "$(grep '^PARAM_CFN_NAMES=' "$INSTALL_SH")"
+assert_contains "permission check includes BPA modification" 'ec2:ModifyVpcBlockPublicAccessExclusion' "$permissions_body"
+assert_contains "permission check includes BPA deletion" 'ec2:DeleteVpcBlockPublicAccessExclusion' "$permissions_body"
+assert_contains "permission simulation failure is handled separately" 'if ! denied_actions=$(aws iam simulate-principal-policy' "$permissions_body"
 
 if python3 - "$TEMPLATE" <<'PY'
 import sys, yaml
@@ -126,6 +148,8 @@ param = doc['Parameters']['CreateVpcBpaExclusion']
 assert param['Default'] == 'true'
 assert param['AllowedValues'] == ['true', 'false']
 condition = doc['Conditions']['ShouldCreateVpcBpaExclusion']
+assert 'CreateNewVpc' in repr(condition)
+assert 'CreateVpcBpaExclusion' in repr(condition)
 resource = doc['Resources']['VpcBpaExclusion']
 assert resource['Type'] == 'AWS::EC2::VPCBlockPublicAccessExclusion'
 assert resource['Condition'] == 'ShouldCreateVpcBpaExclusion'

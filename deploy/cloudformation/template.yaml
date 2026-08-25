@@ -472,7 +472,10 @@ Conditions:
   IsApiKey: !Equals [!Ref ModelMode, 'api-key']
   IsBedrock: !Equals [!Ref ModelMode, 'bedrock']
   CreateNewVpc: !Equals [!Ref ExistingVpcId, '']
-  ShouldCreateVpcBpaExclusion: !Equals [!Ref CreateVpcBpaExclusion, 'true']
+  # New VPCs always require the exclusion; reused VPCs may supply an existing one.
+  ShouldCreateVpcBpaExclusion: !Or
+    - !Condition CreateNewVpc
+    - !Equals [!Ref CreateVpcBpaExclusion, 'true']
   IsBuilder: !Equals [!Ref ProfileName, 'builder']
   IsNotBuilder: !Not [!Condition IsBuilder]
   IsAccountAssistant: !Equals [!Ref ProfileName, 'account_assistant']
