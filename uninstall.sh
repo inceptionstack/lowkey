@@ -241,9 +241,8 @@ vpc_bpa_lifecycle() {
   local stack_name stack_vpc resources
   local stacks
   if ! stacks=$(aws cloudformation list-stacks \
-    --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE \
     --region "$SCAN_REGION" \
-    --query 'StackSummaries[].StackName' --output text 2>/dev/null); then
+    --query 'StackSummaries[?StackStatus!=`DELETE_COMPLETE` && StackStatus!=`DELETE_IN_PROGRESS`].StackName' --output text 2>/dev/null); then
     return 2
   fi
 
@@ -283,9 +282,8 @@ vpc_stack_instance_ids() {
   local stack_name stack_vpc instances
   local stacks
   if ! stacks=$(aws cloudformation list-stacks \
-    --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE \
     --region "$SCAN_REGION" \
-    --query 'StackSummaries[].StackName' --output text 2>/dev/null); then
+    --query 'StackSummaries[?StackStatus!=`DELETE_COMPLETE` && StackStatus!=`DELETE_IN_PROGRESS`].StackName' --output text 2>/dev/null); then
     return 2
   fi
 
@@ -469,9 +467,8 @@ try_delete_cfn_stack() {
   local vpc_id="$1"
   local stacks
   if ! stacks=$(aws cloudformation list-stacks \
-    --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE \
     --region "$SCAN_REGION" \
-    --query 'StackSummaries[*].StackName' --output text 2>/dev/null); then
+    --query 'StackSummaries[?StackStatus!=`DELETE_COMPLETE` && StackStatus!=`DELETE_IN_PROGRESS`].StackName' --output text 2>/dev/null); then
     warn "Could not inspect CloudFormation stacks for VPC ${vpc_id}; refusing to remove it."
     return 2
   fi

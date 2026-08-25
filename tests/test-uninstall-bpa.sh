@@ -55,13 +55,18 @@ WATERMARKS=("target")
 aws() {
   local service="$1" operation="$2"
   case "${FAKE_SCENARIO}:${service}:${operation}" in
+    rollback-complete:cloudformation:list-stacks)
+      if [[ "$*" == *"DELETE_COMPLETE"* ]]; then
+        printf 'stack-target\n'
+      fi
+      ;;
     failed-lifecycle:cloudformation:list-stacks)
       return 1
       ;;
     shared:cloudformation:list-stacks|retained:cloudformation:list-stacks|single:cloudformation:list-stacks|failed-scan:cloudformation:list-stacks|same-watermark:cloudformation:list-stacks)
       printf 'stack-target\n'
       ;;
-    shared:cloudformation:describe-stack-resources|retained:cloudformation:describe-stack-resources|single:cloudformation:describe-stack-resources|failed-scan:cloudformation:describe-stack-resources|same-watermark:cloudformation:describe-stack-resources)
+    shared:cloudformation:describe-stack-resources|retained:cloudformation:describe-stack-resources|single:cloudformation:describe-stack-resources|failed-scan:cloudformation:describe-stack-resources|same-watermark:cloudformation:describe-stack-resources|rollback-complete:cloudformation:describe-stack-resources)
       if [[ "$*" == *"ResourceType=='AWS::EC2::Instance'"* ]]; then
         printf 'i-target\n'
       elif [[ "$*" == *"ResourceType=='AWS::EC2::VPCBlockPublicAccessExclusion'"* ]]; then
@@ -73,7 +78,7 @@ aws() {
         printf 'vpc-target\n'
       fi
       ;;
-    shared:ec2:describe-instances|retained:ec2:describe-instances)
+    shared:ec2:describe-instances|retained:ec2:describe-instances|rollback-complete:ec2:describe-instances)
       printf 'i-target\ttarget\ni-other\tother\n'
       ;;
     same-watermark:ec2:describe-instances)
@@ -101,6 +106,10 @@ assert_contains "shared VPC warning gives remediation" "CreateVpcBpaExclusion=tr
 FAKE_SCENARIO=same-watermark
 output=$(warn_shared_vpc_bpa 0)
 assert_contains "duplicate watermark still detects shared VPC" "VPC vpc-target is shared" "$output"
+
+FAKE_SCENARIO=rollback-complete
+output=$(warn_shared_vpc_bpa 0)
+assert_contains "rollback-complete stack still warns about shared VPC" "VPC vpc-target is shared" "$output"
 
 FAKE_SCENARIO=retained
 output=$(warn_shared_vpc_bpa 0)
