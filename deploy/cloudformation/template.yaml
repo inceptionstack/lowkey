@@ -1,9 +1,11 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  OpenClaw Instance - Deploys a fully configured OpenClaw AI assistant on EC2
-  within its own VPC. Designed for StackSet deployment across AWS Organization accounts.
+  LowKey agent host on EC2 - provisions public VPC connectivity and a
+  bidirectional VPC Block Public Access exclusion for reliable bootstrap and ingress.
 
 Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@2
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
@@ -53,6 +55,7 @@ Metadata:
           - ExistingVpcId
           - ExistingSubnetId
           - ExistingSubnetId2
+          - CreateVpcBpaExclusion
           - SSHAllowedCidr
           - KeyPairName
       - Label:
@@ -368,6 +371,12 @@ Parameters:
     Description: "Second public subnet ID in a different AZ. Required for KiroCrew pack (ALB needs 2 AZs) when ExistingVpcId is set."
     AllowedPattern: '^(subnet-[a-z0-9]+)?$'
 
+  CreateVpcBpaExclusion:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: "Create a VPC-wide allow-bidirectional Block Public Access exclusion. The LowKey wizard sets this to false only when the reused VPC already has an active bidirectional exclusion."
+
   RepoBranch:
     Type: String
     Default: 'main'
@@ -463,6 +472,11 @@ Conditions:
   IsApiKey: !Equals [!Ref ModelMode, 'api-key']
   IsBedrock: !Equals [!Ref ModelMode, 'bedrock']
   CreateNewVpc: !Equals [!Ref ExistingVpcId, '']
+  # New VPCs always get a stack-owned exclusion. When LowKey must create one
+  # for a reused VPC, retain it independently of this individual deployment.
+  CreateExistingVpcBpaExclusion: !And
+    - !Not [!Condition CreateNewVpc]
+    - !Equals [!Ref CreateVpcBpaExclusion, 'true']
   IsBuilder: !Equals [!Ref ProfileName, 'builder']
   IsNotBuilder: !Not [!Condition IsBuilder]
   IsAccountAssistant: !Equals [!Ref ProfileName, 'account_assistant']
@@ -503,6 +517,56 @@ Resources:
           Value: !Ref LokiWatermark
         - Key: loki:deploy-method
           Value: cloudformation
+        - Key: loki:pack
+          Value: !Ref PackName
+
+  # New LowKey VPCs own their exclusion: stack deletion removes both in order.
+  VpcBpaExclusion:
+    Type: AWS::EC2::VPCBlockPublicAccessExclusion
+    Condition: CreateNewVpc
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Keep LowKey's IGW-backed VPC reachable when regional VPC BPA is enabled.
+        must:
+          - VPC-wide allow-bidirectional; bootstrap needs internet egress and public endpoints need ingress.
+        mutable: review-required
+    Properties:
+      InternetGatewayExclusionMode: allow-bidirectional
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-vpc-bpa-exclusion'
+        - Key: loki:managed
+          Value: 'true'
+        - Key: loki:watermark
+          Value: !Ref LokiWatermark
+        - Key: loki:pack
+          Value: !Ref PackName
+
+  # An exclusion on a reused VPC is VPC-wide shared infrastructure. Retain it
+  # when this deployment is deleted or replaced so another LowKey stack using
+  # the same VPC cannot lose internet connectivity with the owning stack.
+  ExistingVpcBpaExclusion:
+    Type: AWS::EC2::VPCBlockPublicAccessExclusion
+    Condition: CreateExistingVpcBpaExclusion
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Give a reused VPC a BPA exclusion whose lifetime is independent of one LowKey deployment.
+        must:
+          - Retain on stack deletion or replacement because other stacks may share this VPC-wide exclusion.
+        mutable: review-required
+    Properties:
+      InternetGatewayExclusionMode: allow-bidirectional
+      VpcId: !Ref ExistingVpcId
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-vpc-bpa-exclusion'
+        - Key: loki:managed
+          Value: 'true'
+        - Key: loki:watermark
+          Value: !Ref LokiWatermark
         - Key: loki:pack
           Value: !Ref PackName
 
@@ -850,6 +914,16 @@ Resources:
                   - secretsmanager:GetSecretValue
                   - secretsmanager:DescribeSecret
                 Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${KirocrewTgBotTokenSecret}*'
+        # Revalidate the VPC-wide prerequisite immediately before bootstrap.
+        # Inline attachment avoids an IAM propagation race at instance launch.
+        - PolicyName: !Sub '${EnvironmentName}-vpc-bpa-read'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: VerifyVpcBpaExclusion
+                Effect: Allow
+                Action: ec2:DescribeVpcBlockPublicAccessExclusions
+                Resource: '*'
       Tags:
         - Key: Name
           Value: !Sub '${EnvironmentName}-role'
@@ -1838,6 +1912,22 @@ Resources:
   # --------------------------------------------------------------------------
   Instance:
     Type: AWS::EC2::Instance
+    Metadata:
+      # Wait for whichever exclusion this stack creates before UserData starts.
+      # A complete exclusion supplied by a reused VPC needs no stack dependency.
+      VpcBpaExclusionDependency: !If
+        - CreateNewVpc
+        - !Ref VpcBpaExclusion
+        - !If
+          - CreateExistingVpcBpaExclusion
+          - !Ref ExistingVpcBpaExclusion
+          - existing
+      # On the new-VPC path the public internet route must exist before UserData
+      # makes its first AWS call; a reused VPC brings its own routing.
+      PublicRoutingDependency: !If
+        - CreateNewVpc
+        - !Sub '${VPCGatewayAttachment}|${PublicRoute}|${PublicSubnetRouteTableAssociation}'
+        - existing
     CreationPolicy:
       ResourceSignal:
         Timeout: PT30M
@@ -1933,6 +2023,46 @@ Resources:
               aws cloudformation signal-resource --stack-name "${!STACK_NAME}" --logical-resource-id Instance --unique-id "$_INSTANCE_ID" --status FAILURE --region "$REGION" 2>/dev/null || true
             fi
           ' ERR
+          # Fail closed before any pack code starts. This revalidates exclusions
+          # supplied by reused VPCs and protects direct CloudFormation callers
+          # that bypass the installer's pre-deployment check.
+          _IMDS_TOKEN=$(curl -sf -X PUT http://169.254.169.254/latest/api/token \
+            -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
+          _PRIMARY_MAC=$(curl -sf -H "X-aws-ec2-metadata-token: $_IMDS_TOKEN" \
+            http://169.254.169.254/latest/meta-data/network/interfaces/macs/ | head -1)
+          # IMDS directory listings return each entry with a trailing slash;
+          # leaving it in would build a rejected double-slash vpc-id path.
+          _PRIMARY_MAC="${!_PRIMARY_MAC%/}"
+          _TARGET_VPC_ID=$(curl -sf -H "X-aws-ec2-metadata-token: $_IMDS_TOKEN" \
+            "http://169.254.169.254/latest/meta-data/network/interfaces/macs/$_PRIMARY_MAC/vpc-id")
+          if [[ -z "$_TARGET_VPC_ID" ]]; then
+            echo "FATAL: could not resolve the instance VPC before BPA validation" >&2
+            # Fail via a failing command, not 'exit': only that triggers the ERR
+            # trap above, which publishes SSM status and signals CFN promptly.
+            false
+          fi
+
+          _BPA_READY=false
+          for _attempt in 1 2 3 4 5 6; do
+            # Known limitation: only the first 100 exclusions in the region are
+            # inspected; see the BPA section in deploy/cloudformation/README.md.
+            _BPA_COUNT=$(aws ec2 describe-vpc-block-public-access-exclusions \
+              --region "$REGION" --max-results 100 \
+              --query "length(VpcBlockPublicAccessExclusions[?ends_with(ResourceArn, ':vpc/$_TARGET_VPC_ID') && InternetGatewayExclusionMode == 'allow-bidirectional' && (State == 'create-complete' || State == 'update-complete')])" \
+              --output text 2>/dev/null || echo 0)
+            if [[ "$_BPA_COUNT" =~ ^[1-9][0-9]*$ ]]; then
+              _BPA_READY=true
+              break
+            fi
+            echo "VPC BPA exclusion not ready (attempt $_attempt/6); retrying in 10s..."
+            sleep 10
+          done
+          if [[ "$_BPA_READY" != "true" ]]; then
+            echo "FATAL: VPC $_TARGET_VPC_ID lacks a complete allow-bidirectional BPA exclusion; refusing to start pack bootstrap" >&2
+            # Fail via a failing command, not 'exit', so the ERR trap reports it.
+            false
+          fi
+
           # Ensure git is available (not present on all AMIs)
           command -v git &>/dev/null || dnf install -y git 2>/dev/null || yum install -y git
           # Clone repo with retry (GitHub blips shouldn't kill bootstrap)

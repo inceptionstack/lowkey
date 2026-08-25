@@ -77,6 +77,41 @@ aws cloudformation create-stack-instances \
 - The `CreationPolicy` with `ResourceSignal` ensures the stack only completes when the instance is fully bootstrapped
 - Requires `CAPABILITY_NAMED_IAM` due to named IAM roles and users
 
+## VPC Block Public Access exclusion
+
+The stack creates a VPC-wide `allow-bidirectional` VPC Block Public Access exclusion so bootstrap egress and public endpoints keep working when BPA is enabled. This exempts the **entire VPC** for internet ingress and egress, not only the LowKey instance.
+
+| `ExistingVpcId` | `CreateVpcBpaExclusion` | Behavior |
+|---|---|---|
+| empty (new VPC) | `true` | Stack-owned exclusion, deleted with the stack |
+| empty (new VPC) | `false` | Same as `true` — ignored, because a new VPC always needs one |
+| set (reused VPC) | `true` | Created with `DeletionPolicy: Retain` / `UpdateReplacePolicy: Retain`, so it survives stack deletion |
+| set (reused VPC) | `false` | Nothing created; the VPC must already have a complete `allow-bidirectional` exclusion |
+
+Reusing a VPC that already has one **requires** `CreateVpcBpaExclusion=false`, or the stack fails trying to create a duplicate. UserData revalidates the exclusion before running any pack and aborts if it is missing.
+
+Cleanup, once no deployment needs that VPC exempt:
+
+```bash
+aws ec2 describe-vpc-block-public-access-exclusions \
+  --query 'VpcBlockPublicAccessExclusions[].[ExclusionId,ResourceArn,State]' --output text
+aws ec2 delete-vpc-block-public-access-exclusion --exclusion-id <id>
+```
+
+> **Warning**
+> A **new-VPC** exclusion is stack-owned and deleted with its stack. If another LowKey deployment was later pointed at that same VPC, deleting the first stack removes the exemption the second one depends on. Recreate an exclusion, or redeploy the remaining stack with `CreateVpcBpaExclusion=true`.
+
+### Limitation: first 100 exclusions only
+
+Exclusion discovery is deliberately not paginated. Both the installer and the instance-side check inspect only the **first 100** BPA exclusions in the region (`--max-results 100`). The default quota is well under that, so this is an accepted edge case for now.
+
+If an account holds more than 100 exclusions and the target VPC's exclusion falls outside that first page:
+
+- The installer treats it as absent and passes `CreateVpcBpaExclusion=true`, so CloudFormation attempts a duplicate and the stack fails with a create error.
+- The instance-side check likewise does not see it and refuses to start pack bootstrap, so the deployment fails closed rather than running without internet access.
+
+Workaround: none that keeps the deployment working. Setting `CreateVpcBpaExclusion=false` only avoids the duplicate-create failure — the instance-side check reads the same first 100 results, so bootstrap still refuses to start. Deploying into such a region requires bringing the region's exclusion count back under 100, so the target VPC's exclusion appears in the first page of results.
+
 ## Next Steps
 
 See [Next Steps After Deployment](../README.md#next-steps-after-deployment) for bootstrap scripts setup.

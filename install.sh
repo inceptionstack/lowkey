@@ -1558,6 +1558,65 @@ _check_codex_model_access() {
   fi
 }
 
+# Resolve whether CloudFormation must create the default VPC-wide BPA
+# exclusion. New VPCs always need one. For reused VPCs, avoid creating a
+# duplicate when an active allow-bidirectional exclusion already covers it.
+resolve_vpc_bpa_exclusion() {
+  CREATE_VPC_BPA_EXCLUSION="true"
+  VPC_BPA_EXCLUSION_STATUS="will be created"
+
+  [[ -n "${EXISTING_VPC_ID:-}" ]] || return 0
+
+  local check_region="${DEPLOY_REGION:-$REGION}"
+  local target_suffix=":vpc/${EXISTING_VPC_ID}"
+  local exclusions_json
+
+  # Known limitation: only the first 100 exclusions in the region are
+  # inspected. Accounts holding more are an accepted edge case for now — see
+  # the BPA section in deploy/cloudformation/README.md.
+  if ! exclusions_json=$(aws ec2 describe-vpc-block-public-access-exclusions \
+      --region "$check_region" --max-results 100 --output json 2>&1) \
+     || ! printf '%s' "$exclusions_json" | jq -e . >/dev/null 2>&1; then
+    fail "Could not inspect VPC BPA exclusions for ${EXISTING_VPC_ID} in ${check_region}. Refusing to risk a duplicate exclusion. AWS said: ${exclusions_json}"
+  fi
+
+  local exclusion_json
+  exclusion_json=$(printf '%s' "$exclusions_json" | jq -c --arg suffix "$target_suffix" '
+    [.VpcBlockPublicAccessExclusions[]?
+      | select((.ResourceArn // "") | endswith($suffix))][0] // empty
+  ')
+
+  [[ -n "$exclusion_json" ]] || return 0
+
+  local exclusion_state exclusion_mode exclusion_reason
+  exclusion_state=$(printf '%s' "$exclusion_json" | jq -r '.State // "unknown"')
+  exclusion_mode=$(printf '%s' "$exclusion_json" | jq -r '.InternetGatewayExclusionMode // "unknown"')
+  exclusion_reason=$(printf '%s' "$exclusion_json" | jq -r '.Reason // empty')
+
+  case "$exclusion_state" in
+    create-complete|update-complete)
+      case "$exclusion_mode" in
+        allow-bidirectional)
+          CREATE_VPC_BPA_EXCLUSION="false"
+          VPC_BPA_EXCLUSION_STATUS="already exists"
+          ;;
+        allow-egress)
+          fail "VPC ${EXISTING_VPC_ID} has an egress-only BPA exclusion. LowKey requires allow-bidirectional so ingress can reach this VPC. Update or remove the existing exclusion, then rerun the wizard."
+          ;;
+        *)
+          fail "VPC ${EXISTING_VPC_ID} has a BPA exclusion with unsupported mode '${exclusion_mode}'. LowKey requires allow-bidirectional."
+          ;;
+      esac
+      ;;
+    create-in-progress|update-in-progress)
+      fail "VPC ${EXISTING_VPC_ID} has a BPA exclusion still in state '${exclusion_state}'. Wait for it to complete, then rerun the wizard so no pack starts before the exclusion is active."
+      ;;
+    *)
+      fail "VPC ${EXISTING_VPC_ID} has a BPA exclusion in unusable state '${exclusion_state}'${exclusion_reason:+: ${exclusion_reason}}. Resolve that exclusion, then rerun the wizard."
+      ;;
+  esac
+}
+
 check_vpc_quota() {
   local check_region="${DEPLOY_REGION:-$REGION}"
   echo ""
@@ -1617,12 +1676,21 @@ check_vpc_quota() {
 check_permissions() {
   echo ""
   info "Checking permissions..."
-  if aws iam simulate-principal-policy \
-    --policy-source-arn "$CALLER_ARN" \
-    --action-names "cloudformation:CreateStack" "iam:CreateRole" "ec2:CreateVpc" \
-    --query 'EvaluationResults[?EvalDecision!=`allowed`].EvalActionName' \
-    --output text 2>/dev/null | grep -q "."; then
-    warn "Some permissions may be missing."
+  local denied_actions
+  if ! denied_actions=$(aws iam simulate-principal-policy \
+      --policy-source-arn "$CALLER_ARN" \
+      --action-names "cloudformation:CreateStack" "iam:CreateRole" "ec2:CreateVpc" \
+        "ec2:CreateVpcBlockPublicAccessExclusion" "ec2:DescribeVpcBlockPublicAccessExclusions" \
+        "ec2:ModifyVpcBlockPublicAccessExclusion" "ec2:DeleteVpcBlockPublicAccessExclusion" \
+      --query 'EvaluationResults[?EvalDecision!=`allowed`].EvalActionName' \
+      --output text 2>&1); then
+    warn "Could not verify deployment permissions: ${denied_actions}"
+    confirm_or_abort "Continue without verified permissions?"
+    return 0
+  fi
+
+  if [[ -n "$denied_actions" ]]; then
+    warn "Some permissions may be missing: ${denied_actions}"
     confirm_or_abort "Continue anyway?"
   else
     ok "Permissions verified"
@@ -2420,7 +2488,7 @@ collect_security_config() {
 # Parameter source-of-truth: single mapping for CFN Console and CFN CLI
 # ============================================================================
 # ⚠ KEEP THESE TWO ARRAYS IN SYNC — same order, same count
-PARAM_CFN_NAMES=(EnvironmentName PackName ProfileName InstanceType DefaultModel ModelMode BedrockRegion LokiWatermark EnableBedrockForm EnableSecurityHub EnableGuardDuty EnableInspector EnableAccessAnalyzer EnableConfigRecorder ExistingVpcId ExistingSubnetId ExistingSubnetId2 RepoBranch KiroFromSecret TelegramBotTokenSecret TelegramUser Primary DailyDriver CodexModel EnableWebUIAuth WebUIAdminEmail EdgeLambdaVersionArn EdgeConfigSecretName EdgeConfigSecretArn SigningKeySecretName SigningKeySecretArn KirocrewTgBotTokenSecret KirocrewTgUserId)
+PARAM_CFN_NAMES=(EnvironmentName PackName ProfileName InstanceType DefaultModel ModelMode BedrockRegion LokiWatermark EnableBedrockForm EnableSecurityHub EnableGuardDuty EnableInspector EnableAccessAnalyzer EnableConfigRecorder ExistingVpcId ExistingSubnetId ExistingSubnetId2 CreateVpcBpaExclusion RepoBranch KiroFromSecret TelegramBotTokenSecret TelegramUser Primary DailyDriver CodexModel EnableWebUIAuth WebUIAdminEmail EdgeLambdaVersionArn EdgeConfigSecretName EdgeConfigSecretArn SigningKeySecretName SigningKeySecretArn KirocrewTgBotTokenSecret KirocrewTgUserId)
 PARAM_VALUES=()  # populated by build_deploy_params()
 
 # Per-pack default model (passed to CFN DefaultModel / bootstrap.sh --model).
@@ -2473,6 +2541,7 @@ build_deploy_params() {
     "${EXISTING_VPC_ID:-}"
     "${EXISTING_SUBNET_ID:-}"
     "${EXISTING_SUBNET_ID2:-}"
+    "${CREATE_VPC_BPA_EXCLUSION:-true}"
     "$REPO_BRANCH"
     "${KIRO_FROM_SECRET:-}"
     "${TELEGRAM_BOT_TOKEN_SECRET:-}"
@@ -2571,6 +2640,9 @@ show_summary() {
     summary+="Bedrock       ${BEDROCK_REGION} (cross-region inference)\n"
   fi
   [[ -n "${EXISTING_VPC_ID:-}" ]] && summary+="VPC           reuse ${EXISTING_VPC_ID}\n"
+  local bpa_management_note=""
+  [[ "${CREATE_VPC_BPA_EXCLUSION:-true}" == "false" ]] && bpa_management_note="; external, not managed by this stack"
+  summary+="BPA exclusion: ${VPC_BPA_EXCLUSION_STATUS:-will be created} (VPC-wide bidirectional; allows internet ingress to this VPC and internet egress${bpa_management_note})\n"
   summary+="Security      ${security_summary}\n"
   summary+="Environment   ${ENV_NAME}"
 
@@ -2808,6 +2880,8 @@ PACK_NAME="openclaw"  # Default pack; overridden by collect_config
 EXISTING_VPC_ID=""
 EXISTING_SUBNET_ID=""
 EXISTING_SUBNET_ID2=""  # KiroCrew ALB needs a 2nd AZ subnet on existing-VPC path
+CREATE_VPC_BPA_EXCLUSION="true"
+VPC_BPA_EXCLUSION_STATUS="will be created"
 
 # ============================================================================
 # Ensure Lowkey-Session SSM document exists (instance-scoped, not account-wide)
@@ -3354,6 +3428,11 @@ run_config_and_review() {
     collect_config
     check_existing_deployments
   fi
+
+  # Every LowKey VPC is bidirectionally excluded from regional VPC BPA.
+  # Resolve an existing exclusion before the final review so the summary can
+  # say whether CloudFormation will create it or it is already present.
+  resolve_vpc_bpa_exclusion
 
   # VPC quota check (skip if reusing)
   if [[ -z "${EXISTING_VPC_ID:-}" ]]; then

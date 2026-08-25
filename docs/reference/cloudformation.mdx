@@ -39,6 +39,7 @@ You rarely set these by hand — `install.sh` computes them from your pack + pro
 | `EnableConfigRecorder` | `true` | Enable Config recorder |
 | `ExistingVpcId` | `vpc-0abc123` | Reuse an existing VPC instead of creating one |
 | `ExistingSubnetId` | `subnet-0def456` | Public subnet in the existing VPC |
+| `CreateVpcBpaExclusion` | `true` | Create the VPC-wide `allow-bidirectional` Block Public Access exclusion. Set to `false` only when reusing a VPC that already has a complete one |
 | `RepoBranch` | `main` | Git branch of the lowkey repo to clone |
 | `SSHAllowedCidr` | `127.0.0.1/32` | CIDR allowed to SSH (default disables SSH) |
 | `KiroFromSecret` | `/lowkey/kiro-api-key` | Secrets Manager id/arn for Kiro API key (kiro-cli only) |
@@ -48,6 +49,29 @@ You rarely set these by hand — `install.sh` computes them from your pack + pro
 <Warning>
 `LiteLLMApiKey` and `ProviderApiKey` are `NoEcho: true` — they won't appear in stack history or describe-stacks output, but they **do** pass through UserData (which is Base64-encoded in stack metadata). For long-lived secrets, prefer the `--kiro-from-secret` / Secrets Manager pattern which flows only a reference.
 </Warning>
+
+## VPC Block Public Access exclusion
+
+Every deployment needs its VPC exempt from [VPC Block Public Access](https://docs.aws.amazon.com/vpc/latest/userguide/security-vpc-bpa.html): bootstrap downloads require internet egress, and public endpoints (such as the KiroCrew ALB) require ingress. The stack creates a VPC-wide `allow-bidirectional` exclusion to guarantee this.
+
+<Warning>
+`allow-bidirectional` exempts the **entire VPC**, allowing internet ingress *and* egress for every resource in it — not just the LowKey instance. Deploy only into a VPC where that is acceptable.
+</Warning>
+
+| `ExistingVpcId` | `CreateVpcBpaExclusion` | Behavior |
+|---|---|---|
+| empty (new VPC) | `true` | Creates a stack-owned exclusion, deleted with the stack |
+| empty (new VPC) | `false` | Same as `true` — the parameter is ignored, because a new VPC always needs an exclusion |
+| set (reused VPC) | `true` | Creates an exclusion with `DeletionPolicy: Retain` and `UpdateReplacePolicy: Retain`, so the shared VPC-wide exclusion outlives this stack |
+| set (reused VPC) | `false` | Creates nothing; the VPC must already have a complete `allow-bidirectional` exclusion |
+
+Reusing a VPC that already has a complete exclusion **requires** `CreateVpcBpaExclusion=false` — otherwise CloudFormation attempts a duplicate exclusion and the stack fails. `install.sh` detects this and sets the parameter for you.
+
+Before cloning the repo or running any pack, UserData verifies its own VPC has a complete `allow-bidirectional` exclusion and aborts if it does not, so a misconfigured direct deployment fails closed instead of bootstrapping without connectivity.
+
+<Info>
+**Limitation — first 100 exclusions only.** Discovery is not paginated: the installer and the instance-side check each inspect only the first 100 BPA exclusions in the region. The default quota is far below that, so this is an accepted edge case. In a region holding more, an exclusion outside that first page reads as absent — the stack fails on a duplicate create, and bootstrap refuses to start rather than running unexempted. Setting `CreateVpcBpaExclusion=false` is **not** a workaround: it avoids the duplicate create, but the instance-side check reads the same first 100 results and still aborts. Deploying into such a region requires bringing the region's exclusion count back under 100.
+</Info>
 
 ## Deploying the template directly
 
@@ -105,3 +129,10 @@ The stack owns the VPC, EC2, IAM — everything vanishes together. Security serv
 <Info>
 If you reused an existing VPC via `ExistingVpcId`, the VPC is **not** deleted (you brought it, you keep it).
 </Info>
+
+<Warning>
+Two BPA exceptions to "everything vanishes together":
+
+- An exclusion this stack created for a **reused** VPC is `Retain`ed and survives deletion. Remove it with `aws ec2 delete-vpc-block-public-access-exclusion --exclusion-id <id>` once no deployment needs that VPC exempt.
+- An exclusion created for a **new** VPC is deleted with the stack. If another LowKey deployment was later pointed at that same VPC, it loses the exemption — recreate one, or redeploy that stack with `CreateVpcBpaExclusion=true`.
+</Warning>
