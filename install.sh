@@ -1568,18 +1568,38 @@ resolve_vpc_bpa_exclusion() {
   [[ -n "${EXISTING_VPC_ID:-}" ]] || return 0
 
   local check_region="${DEPLOY_REGION:-$REGION}"
-  local exclusions_json
-  if ! exclusions_json=$(aws ec2 describe-vpc-block-public-access-exclusions \
-      --region "$check_region" --max-results 100 --output json 2>&1); then
-    fail "Could not inspect VPC BPA exclusions for ${EXISTING_VPC_ID} in ${check_region}. Refusing to risk a duplicate exclusion. AWS said: ${exclusions_json}"
-  fi
-
   local target_suffix=":vpc/${EXISTING_VPC_ID}"
-  local exclusion_json
-  exclusion_json=$(printf '%s' "$exclusions_json" | jq -c --arg suffix "$target_suffix" '
-    [.VpcBlockPublicAccessExclusions[]?
-      | select((.ResourceArn // "") | endswith($suffix))][0] // empty
-  ')
+  local exclusion_json="" next_token="" page_json page_match
+
+  # This API is not auto-paginated by the AWS CLI, so follow NextToken
+  # explicitly. Missing a later page would hide an existing exclusion and
+  # cause a duplicate-create attempt.
+  while :; do
+    if [[ -n "$next_token" ]]; then
+      page_json=$(aws ec2 describe-vpc-block-public-access-exclusions \
+        --region "$check_region" --max-results 100 --starting-token "$next_token" \
+        --output json 2>&1) || page_json=""
+    else
+      page_json=$(aws ec2 describe-vpc-block-public-access-exclusions \
+        --region "$check_region" --max-results 100 --output json 2>&1) || page_json=""
+    fi
+    if [[ -z "$page_json" ]] || ! printf '%s' "$page_json" | jq -e . >/dev/null 2>&1; then
+      fail "Could not inspect VPC BPA exclusions for ${EXISTING_VPC_ID} in ${check_region}. Refusing to risk a duplicate exclusion. AWS said: ${page_json}"
+    fi
+
+    page_match=$(printf '%s' "$page_json" | jq -c --arg suffix "$target_suffix" '
+      [.VpcBlockPublicAccessExclusions[]?
+        | select((.ResourceArn // "") | endswith($suffix))][0] // empty
+    ')
+    if [[ -n "$page_match" ]]; then
+      exclusion_json="$page_match"
+      break
+    fi
+
+    next_token=$(printf '%s' "$page_json" | jq -r '.NextToken // empty')
+    [[ -n "$next_token" ]] || break
+  done
+
   [[ -n "$exclusion_json" ]] || return 0
 
   local exclusion_state exclusion_mode exclusion_reason

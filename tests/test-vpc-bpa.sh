@@ -74,6 +74,51 @@ JSON
 }
 test_other_vpc_exclusion_is_ignored
 
+test_exclusion_on_second_page_is_found() {
+  source "${TMPDIR}/functions.sh"
+  EXISTING_VPC_ID="vpc-0123456789abcdef0"
+  aws() {
+    local starting_token=""
+    while [[ $# -gt 0 ]]; do
+      [[ "$1" == "--starting-token" ]] && starting_token="$2"
+      shift
+    done
+    if [[ -z "$starting_token" ]]; then
+      cat <<'JSON'
+{"VpcBlockPublicAccessExclusions":[{"ExclusionId":"vpcbpa-excl-other","InternetGatewayExclusionMode":"allow-bidirectional","ResourceArn":"arn:aws:ec2:us-east-1:123456789012:vpc/vpc-fffffffffffffffff","State":"create-complete"}],"NextToken":"page2"}
+JSON
+    else
+      cat <<'JSON'
+{"VpcBlockPublicAccessExclusions":[{"ExclusionId":"vpcbpa-excl-page2","InternetGatewayExclusionMode":"allow-bidirectional","ResourceArn":"arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0123456789abcdef0","State":"create-complete"}]}
+JSON
+    fi
+  }
+  resolve_vpc_bpa_exclusion
+  assert_eq "exclusion on a later page is found" "false" "$CREATE_VPC_BPA_EXCLUSION"
+  assert_eq "paginated exclusion review status" "already exists" "$VPC_BPA_EXCLUSION_STATUS"
+}
+test_exclusion_on_second_page_is_found
+
+test_pagination_ends_without_match() {
+  source "${TMPDIR}/functions.sh"
+  EXISTING_VPC_ID="vpc-0123456789abcdef0"
+  aws() {
+    local starting_token=""
+    while [[ $# -gt 0 ]]; do
+      [[ "$1" == "--starting-token" ]] && starting_token="$2"
+      shift
+    done
+    if [[ -z "$starting_token" ]]; then
+      printf '{"VpcBlockPublicAccessExclusions":[],"NextToken":"page2"}\n'
+    else
+      printf '{"VpcBlockPublicAccessExclusions":[]}\n'
+    fi
+  }
+  resolve_vpc_bpa_exclusion
+  assert_eq "exhausted pages without a match still creates" "true" "$CREATE_VPC_BPA_EXCLUSION"
+}
+test_pagination_ends_without_match
+
 assert_reused_exclusion_rejected() {
   local state="$1" mode="$2" description="$3" reason="${4:-}"
   if (
@@ -149,7 +194,7 @@ template_text = open(sys.argv[1]).read()
 with open(sys.argv[1]) as stream:
     doc = yaml.load(stream, Loader=Loader)
 assert 'ec2:DescribeVpcBlockPublicAccessExclusions' in template_text
-assert '--output json 2>/dev/null || echo 0' in template_text
+assert '--starting-token "$_BPA_TOKEN"' in template_text
 bpa_check = template_text.index('aws ec2 describe-vpc-block-public-access-exclusions')
 git_clone = template_text.index('git clone --depth 1')
 pack_bootstrap = template_text.index('bash /tmp/lowkey/deploy/bootstrap.sh')
@@ -177,6 +222,9 @@ assert existing_vpc_resource['UpdateReplacePolicy'] == 'Retain'
 instance_dependency = doc['Resources']['Instance']['Metadata']['VpcBpaExclusionDependency']
 assert 'VpcBpaExclusion' in repr(instance_dependency)
 assert 'ExistingVpcBpaExclusion' in repr(instance_dependency)
+routing_dependency = repr(doc['Resources']['Instance']['Metadata']['PublicRoutingDependency'])
+for required in ('VPCGatewayAttachment', 'PublicRoute', 'PublicSubnetRouteTableAssociation'):
+    assert required in routing_dependency
 assert doc['Metadata']['AWSToolsMetrics']['AWSAgentToolkit'] == 'aws-cloudformation@2'
 PY
 then

@@ -77,6 +77,16 @@ aws cloudformation create-stack-instances \
 - The `CreationPolicy` with `ResourceSignal` ensures the stack only completes when the instance is fully bootstrapped
 - Requires `CAPABILITY_NAMED_IAM` due to named IAM roles and users
 
+## VPC Block Public Access exclusion
+
+The stack creates a VPC-wide `allow-bidirectional` VPC Block Public Access exclusion so bootstrap egress and public endpoints keep working when BPA is enabled. This exempts the **entire VPC** for internet ingress and egress, not only the LowKey instance.
+
+- New VPC: always created and owned by the stack (`CreateVpcBpaExclusion` is ignored).
+- Reused VPC with `CreateVpcBpaExclusion=true`: created with `DeletionPolicy: Retain` / `UpdateReplacePolicy: Retain`, so it survives stack deletion.
+- Reused VPC with `CreateVpcBpaExclusion=false`: nothing is created; the VPC must already have a complete `allow-bidirectional` exclusion.
+
+Reusing a VPC that already has one **requires** `CreateVpcBpaExclusion=false`, or the stack fails trying to create a duplicate. UserData revalidates the exclusion before running any pack and aborts if it is missing.
+
 ## Next Steps
 
 See [Next Steps After Deployment](../README.md#next-steps-after-deployment) for bootstrap scripts setup.

@@ -1922,6 +1922,12 @@ Resources:
           - CreateExistingVpcBpaExclusion
           - !Ref ExistingVpcBpaExclusion
           - existing
+      # On the new-VPC path the public internet route must exist before UserData
+      # makes its first AWS call; a reused VPC brings its own routing.
+      PublicRoutingDependency: !If
+        - CreateNewVpc
+        - !Sub '${VPCGatewayAttachment}|${PublicRoute}|${PublicSubnetRouteTableAssociation}'
+        - existing
     CreationPolicy:
       ResourceSignal:
         Timeout: PT30M
@@ -2033,11 +2039,33 @@ Resources:
 
           _BPA_READY=false
           for _attempt in 1 2 3 4 5 6; do
-            _BPA_MATCHES=$(aws ec2 describe-vpc-block-public-access-exclusions \
-              --region "$REGION" --max-results 100 \
-              --query "length(VpcBlockPublicAccessExclusions[?ends_with(ResourceArn, ':vpc/$_TARGET_VPC_ID') && InternetGatewayExclusionMode == 'allow-bidirectional' && (State == 'create-complete' || State == 'update-complete')])" \
-              --output json 2>/dev/null || echo 0)
-            if [[ "$_BPA_MATCHES" =~ ^[1-9][0-9]*$ ]]; then
+            # This API has no CLI paginator, so walk NextToken explicitly: one
+            # request per page, each returning "<match-count> <next-token>".
+            _BPA_TOKEN="None"
+            _BPA_FOUND=0
+            while :; do
+              if [[ "$_BPA_TOKEN" == "None" ]]; then
+                _BPA_PAGE=$(aws ec2 describe-vpc-block-public-access-exclusions \
+                  --region "$REGION" --max-results 100 \
+                  --query "[length(VpcBlockPublicAccessExclusions[?ends_with(ResourceArn, ':vpc/$_TARGET_VPC_ID') && InternetGatewayExclusionMode == 'allow-bidirectional' && (State == 'create-complete' || State == 'update-complete')]), NextToken]" \
+                  --output text 2>/dev/null || echo "")
+              else
+                _BPA_PAGE=$(aws ec2 describe-vpc-block-public-access-exclusions \
+                  --region "$REGION" --max-results 100 --starting-token "$_BPA_TOKEN" \
+                  --query "[length(VpcBlockPublicAccessExclusions[?ends_with(ResourceArn, ':vpc/$_TARGET_VPC_ID') && InternetGatewayExclusionMode == 'allow-bidirectional' && (State == 'create-complete' || State == 'update-complete')]), NextToken]" \
+                  --output text 2>/dev/null || echo "")
+              fi
+              [[ -n "$_BPA_PAGE" ]] || break
+              _BPA_COUNT=$(printf '%s' "$_BPA_PAGE" | awk '{print $1}')
+              _BPA_NEXT=$(printf '%s' "$_BPA_PAGE" | awk '{print $2}')
+              if [[ "$_BPA_COUNT" =~ ^[1-9][0-9]*$ ]]; then
+                _BPA_FOUND=1
+                break
+              fi
+              [[ -n "$_BPA_NEXT" && "$_BPA_NEXT" != "None" ]] || break
+              _BPA_TOKEN="$_BPA_NEXT"
+            done
+            if [[ "$_BPA_FOUND" == "1" ]]; then
               _BPA_READY=true
               break
             fi
