@@ -472,9 +472,10 @@ Conditions:
   IsApiKey: !Equals [!Ref ModelMode, 'api-key']
   IsBedrock: !Equals [!Ref ModelMode, 'bedrock']
   CreateNewVpc: !Equals [!Ref ExistingVpcId, '']
-  # New VPCs always require the exclusion; reused VPCs may supply an existing one.
-  ShouldCreateVpcBpaExclusion: !Or
-    - !Condition CreateNewVpc
+  # New VPCs always get a stack-owned exclusion. When LowKey must create one
+  # for a reused VPC, retain it independently of this individual deployment.
+  CreateExistingVpcBpaExclusion: !And
+    - !Not [!Condition CreateNewVpc]
     - !Equals [!Ref CreateVpcBpaExclusion, 'true']
   IsBuilder: !Equals [!Ref ProfileName, 'builder']
   IsNotBuilder: !Not [!Condition IsBuilder]
@@ -519,11 +520,10 @@ Resources:
         - Key: loki:pack
           Value: !Ref PackName
 
-  # LowKey currently uses an IGW-backed public VPC for bootstrap and optional
-  # public endpoints. Keep the VPC reachable when regional BPA is enabled.
+  # New LowKey VPCs own their exclusion: stack deletion removes both in order.
   VpcBpaExclusion:
     Type: AWS::EC2::VPCBlockPublicAccessExclusion
-    Condition: ShouldCreateVpcBpaExclusion
+    Condition: CreateNewVpc
     Metadata:
       com.aws.cloudformation.Context:
         why: Keep LowKey's IGW-backed VPC reachable when regional VPC BPA is enabled.
@@ -532,7 +532,34 @@ Resources:
         mutable: review-required
     Properties:
       InternetGatewayExclusionMode: allow-bidirectional
-      VpcId: !If [CreateNewVpc, !Ref VPC, !Ref ExistingVpcId]
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-vpc-bpa-exclusion'
+        - Key: loki:managed
+          Value: 'true'
+        - Key: loki:watermark
+          Value: !Ref LokiWatermark
+        - Key: loki:pack
+          Value: !Ref PackName
+
+  # An exclusion on a reused VPC is VPC-wide shared infrastructure. Retain it
+  # when this deployment is deleted or replaced so another LowKey stack using
+  # the same VPC cannot lose internet connectivity with the owning stack.
+  ExistingVpcBpaExclusion:
+    Type: AWS::EC2::VPCBlockPublicAccessExclusion
+    Condition: CreateExistingVpcBpaExclusion
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Give a reused VPC a BPA exclusion whose lifetime is independent of one LowKey deployment.
+        must:
+          - Retain on stack deletion or replacement because other stacks may share this VPC-wide exclusion.
+        mutable: review-required
+    Properties:
+      InternetGatewayExclusionMode: allow-bidirectional
+      VpcId: !Ref ExistingVpcId
       Tags:
         - Key: Name
           Value: !Sub '${EnvironmentName}-vpc-bpa-exclusion'
@@ -1876,12 +1903,15 @@ Resources:
   Instance:
     Type: AWS::EC2::Instance
     Metadata:
-      # Optional dependency: when this stack creates the exclusion, wait for it
-      # before UserData attempts internet downloads. Existing exclusions need no wait.
+      # Wait for whichever exclusion this stack creates before UserData starts.
+      # A complete exclusion supplied by a reused VPC needs no stack dependency.
       VpcBpaExclusionDependency: !If
-        - ShouldCreateVpcBpaExclusion
+        - CreateNewVpc
         - !Ref VpcBpaExclusion
-        - existing
+        - !If
+          - CreateExistingVpcBpaExclusion
+          - !Ref ExistingVpcBpaExclusion
+          - existing
     CreationPolicy:
       ResourceSignal:
         Timeout: PT30M

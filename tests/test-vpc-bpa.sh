@@ -150,16 +150,25 @@ with open(sys.argv[1]) as stream:
 param = doc['Parameters']['CreateVpcBpaExclusion']
 assert param['Default'] == 'true'
 assert param['AllowedValues'] == ['true', 'false']
-condition = doc['Conditions']['ShouldCreateVpcBpaExclusion']
+condition = doc['Conditions']['CreateExistingVpcBpaExclusion']
 assert 'CreateNewVpc' in repr(condition)
 assert 'CreateVpcBpaExclusion' in repr(condition)
-resource = doc['Resources']['VpcBpaExclusion']
-assert resource['Type'] == 'AWS::EC2::VPCBlockPublicAccessExclusion'
-assert resource['Condition'] == 'ShouldCreateVpcBpaExclusion'
-assert resource['Properties']['InternetGatewayExclusionMode'] == 'allow-bidirectional'
-assert 'VpcId' in resource['Properties']
+new_vpc_resource = doc['Resources']['VpcBpaExclusion']
+assert new_vpc_resource['Type'] == 'AWS::EC2::VPCBlockPublicAccessExclusion'
+assert new_vpc_resource['Condition'] == 'CreateNewVpc'
+assert new_vpc_resource['Properties']['InternetGatewayExclusionMode'] == 'allow-bidirectional'
+assert new_vpc_resource['Properties']['VpcId'] == 'VPC'
+assert 'DeletionPolicy' not in new_vpc_resource
+existing_vpc_resource = doc['Resources']['ExistingVpcBpaExclusion']
+assert existing_vpc_resource['Type'] == 'AWS::EC2::VPCBlockPublicAccessExclusion'
+assert existing_vpc_resource['Condition'] == 'CreateExistingVpcBpaExclusion'
+assert existing_vpc_resource['Properties']['InternetGatewayExclusionMode'] == 'allow-bidirectional'
+assert existing_vpc_resource['Properties']['VpcId'] == 'ExistingVpcId'
+assert existing_vpc_resource['DeletionPolicy'] == 'Retain'
+assert existing_vpc_resource['UpdateReplacePolicy'] == 'Retain'
 instance_dependency = doc['Resources']['Instance']['Metadata']['VpcBpaExclusionDependency']
 assert 'VpcBpaExclusion' in repr(instance_dependency)
+assert 'ExistingVpcBpaExclusion' in repr(instance_dependency)
 assert doc['Metadata']['AWSToolsMetrics']['AWSAgentToolkit'] == 'aws-cloudformation@2'
 PY
 then
