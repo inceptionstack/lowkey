@@ -2036,7 +2036,7 @@ Resources:
             _BPA_MATCHES=$(aws ec2 describe-vpc-block-public-access-exclusions \
               --region "$REGION" --max-results 100 \
               --query "length(VpcBlockPublicAccessExclusions[?ends_with(ResourceArn, ':vpc/$_TARGET_VPC_ID') && InternetGatewayExclusionMode == 'allow-bidirectional' && (State == 'create-complete' || State == 'update-complete')])" \
-              --output text 2>/dev/null || echo 0)
+              --output json 2>/dev/null || echo 0)
             if [[ "$_BPA_MATCHES" =~ ^[1-9][0-9]*$ ]]; then
               _BPA_READY=true
               break

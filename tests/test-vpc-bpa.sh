@@ -149,6 +149,7 @@ template_text = open(sys.argv[1]).read()
 with open(sys.argv[1]) as stream:
     doc = yaml.load(stream, Loader=Loader)
 assert 'ec2:DescribeVpcBlockPublicAccessExclusions' in template_text
+assert '--output json 2>/dev/null || echo 0' in template_text
 bpa_check = template_text.index('aws ec2 describe-vpc-block-public-access-exclusions')
 git_clone = template_text.index('git clone --depth 1')
 pack_bootstrap = template_text.index('bash /tmp/lowkey/deploy/bootstrap.sh')
