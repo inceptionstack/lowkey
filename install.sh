@@ -1569,47 +1569,22 @@ resolve_vpc_bpa_exclusion() {
 
   local check_region="${DEPLOY_REGION:-$REGION}"
   local target_suffix=":vpc/${EXISTING_VPC_ID}"
-  local exclusion_json="" next_token="" prev_token="" page_json page_match
-  local page_count=0
+  local exclusions_json
 
-  # This API has no AWS CLI paginator, so follow NextToken explicitly using the
-  # API's own --next-token flag (--starting-token only exists for paginated
-  # operations). Missing a later page would hide an existing exclusion and
-  # cause a duplicate-create attempt.
-  while :; do
-    if [[ -n "$next_token" ]]; then
-      page_json=$(aws ec2 describe-vpc-block-public-access-exclusions \
-        --region "$check_region" --max-results 100 --next-token "$next_token" \
-        --output json 2>&1) || page_json=""
-    else
-      page_json=$(aws ec2 describe-vpc-block-public-access-exclusions \
-        --region "$check_region" --max-results 100 --output json 2>&1) || page_json=""
-    fi
-    if [[ -z "$page_json" ]] || ! printf '%s' "$page_json" | jq -e . >/dev/null 2>&1; then
-      fail "Could not inspect VPC BPA exclusions for ${EXISTING_VPC_ID} in ${check_region}. Refusing to risk a duplicate exclusion. AWS said: ${page_json}"
-    fi
+  # Known limitation: only the first 100 exclusions in the region are
+  # inspected. Accounts holding more are an accepted edge case for now — see
+  # the BPA section in deploy/cloudformation/README.md.
+  if ! exclusions_json=$(aws ec2 describe-vpc-block-public-access-exclusions \
+      --region "$check_region" --max-results 100 --output json 2>&1) \
+     || ! printf '%s' "$exclusions_json" | jq -e . >/dev/null 2>&1; then
+    fail "Could not inspect VPC BPA exclusions for ${EXISTING_VPC_ID} in ${check_region}. Refusing to risk a duplicate exclusion. AWS said: ${exclusions_json}"
+  fi
 
-    page_match=$(printf '%s' "$page_json" | jq -c --arg suffix "$target_suffix" '
-      [.VpcBlockPublicAccessExclusions[]?
-        | select((.ResourceArn // "") | endswith($suffix))][0] // empty
-    ')
-    if [[ -n "$page_match" ]]; then
-      exclusion_json="$page_match"
-      break
-    fi
-
-    prev_token="$next_token"
-    next_token=$(printf '%s' "$page_json" | jq -r '.NextToken // empty')
-    [[ -n "$next_token" ]] || break
-    # Fail closed rather than looping forever on a repeating or endless token.
-    if [[ "$next_token" == "$prev_token" ]]; then
-      fail "VPC BPA exclusion lookup in ${check_region} returned a repeating pagination token. Refusing to loop; rerun the wizard."
-    fi
-    page_count=$((page_count + 1))
-    if [[ "$page_count" -ge 50 ]]; then
-      fail "VPC BPA exclusion lookup in ${check_region} exceeded 50 pages without a result. Refusing to loop; rerun the wizard."
-    fi
-  done
+  local exclusion_json
+  exclusion_json=$(printf '%s' "$exclusions_json" | jq -c --arg suffix "$target_suffix" '
+    [.VpcBlockPublicAccessExclusions[]?
+      | select((.ResourceArn // "") | endswith($suffix))][0] // empty
+  ')
 
   [[ -n "$exclusion_json" ]] || return 0
 

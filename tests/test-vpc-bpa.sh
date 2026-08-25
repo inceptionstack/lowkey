@@ -74,64 +74,37 @@ JSON
 }
 test_other_vpc_exclusion_is_ignored
 
-test_exclusion_on_second_page_is_found() {
+test_exclusion_beyond_first_page_is_not_inspected() {
   source "${TMPDIR}/functions.sh"
   EXISTING_VPC_ID="vpc-0123456789abcdef0"
+  # Documented limitation: only the first 100 exclusions are inspected, so a
+  # target hidden behind NextToken is treated as absent rather than paginated.
   aws() {
-    local next_token=""
     while [[ $# -gt 0 ]]; do
-      # Reject the paginator-only flag: this operation has no CLI paginator.
-      [[ "$1" == "--starting-token" ]] && return 252
-      [[ "$1" == "--next-token" ]] && next_token="$2"
+      # No continuation flag may be used by either caller.
+      case "$1" in
+        --next-token|--starting-token) return 252 ;;
+      esac
       shift
     done
-    if [[ -z "$next_token" ]]; then
-      cat <<'JSON'
-{"VpcBlockPublicAccessExclusions":[{"ExclusionId":"vpcbpa-excl-other","InternetGatewayExclusionMode":"allow-bidirectional","ResourceArn":"arn:aws:ec2:us-east-1:123456789012:vpc/vpc-fffffffffffffffff","State":"create-complete"}],"NextToken":"page2"}
-JSON
-    else
-      cat <<'JSON'
-{"VpcBlockPublicAccessExclusions":[{"ExclusionId":"vpcbpa-excl-page2","InternetGatewayExclusionMode":"allow-bidirectional","ResourceArn":"arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0123456789abcdef0","State":"create-complete"}]}
-JSON
-    fi
+    printf '{"VpcBlockPublicAccessExclusions":[],"NextToken":"page2"}\n'
   }
   resolve_vpc_bpa_exclusion
-  assert_eq "exclusion on a later page is found" "false" "$CREATE_VPC_BPA_EXCLUSION"
-  assert_eq "paginated exclusion review status" "already exists" "$VPC_BPA_EXCLUSION_STATUS"
+  assert_eq "single-page lookup does not paginate" "true" "$CREATE_VPC_BPA_EXCLUSION"
+  assert_eq "single-page lookup review status" "will be created" "$VPC_BPA_EXCLUSION_STATUS"
 }
-test_exclusion_on_second_page_is_found
+test_exclusion_beyond_first_page_is_not_inspected
 
-test_pagination_ends_without_match() {
-  source "${TMPDIR}/functions.sh"
-  EXISTING_VPC_ID="vpc-0123456789abcdef0"
-  aws() {
-    local next_token=""
-    while [[ $# -gt 0 ]]; do
-      [[ "$1" == "--starting-token" ]] && return 252
-      [[ "$1" == "--next-token" ]] && next_token="$2"
-      shift
-    done
-    if [[ -z "$next_token" ]]; then
-      printf '{"VpcBlockPublicAccessExclusions":[],"NextToken":"page2"}\n'
-    else
-      printf '{"VpcBlockPublicAccessExclusions":[]}\n'
-    fi
-  }
-  resolve_vpc_bpa_exclusion
-  assert_eq "exhausted pages without a match still creates" "true" "$CREATE_VPC_BPA_EXCLUSION"
-}
-test_pagination_ends_without_match
-
-# A service returning the same token forever must not hang the wizard.
+# Malformed API output must fail closed rather than silently creating a duplicate.
 if (
   source "${TMPDIR}/functions.sh"
   EXISTING_VPC_ID="vpc-0123456789abcdef0"
-  aws() { printf '{"VpcBlockPublicAccessExclusions":[],"NextToken":"same"}\n'; }
+  aws() { printf 'not json\n'; }
   resolve_vpc_bpa_exclusion
 ) >/dev/null 2>&1; then
-  fail_test "repeating pagination token fails closed instead of looping"
+  fail_test "malformed exclusion output stops before duplicate creation"
 else
-  pass "repeating pagination token fails closed instead of looping"
+  pass "malformed exclusion output stops before duplicate creation"
 fi
 
 assert_reused_exclusion_rejected() {
@@ -209,9 +182,9 @@ template_text = open(sys.argv[1]).read()
 with open(sys.argv[1]) as stream:
     doc = yaml.load(stream, Loader=Loader)
 assert 'ec2:DescribeVpcBlockPublicAccessExclusions' in template_text
-assert '--next-token "$_BPA_TOKEN"' in template_text
 assert '--starting-token' not in template_text
-assert '"$_BPA_NEXT" != "$_BPA_PREV"' in template_text
+assert '--next-token' not in template_text
+assert '--max-results 100' in template_text
 assert '${!_PRIMARY_MAC%/}' in template_text
 bpa_check = template_text.index('aws ec2 describe-vpc-block-public-access-exclusions')
 git_clone = template_text.index('git clone --depth 1')

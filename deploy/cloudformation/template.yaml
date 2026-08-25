@@ -2042,41 +2042,13 @@ Resources:
 
           _BPA_READY=false
           for _attempt in 1 2 3 4 5 6; do
-            # This API has no CLI paginator, so walk NextToken explicitly with
-            # the API's own --next-token flag: one request per page, each
-            # returning "<match-count> <next-token>".
-            _BPA_TOKEN="None"
-            _BPA_PREV=""
-            _BPA_PAGES=0
-            _BPA_FOUND=0
-            while :; do
-              if [[ "$_BPA_TOKEN" == "None" ]]; then
-                _BPA_PAGE=$(aws ec2 describe-vpc-block-public-access-exclusions \
-                  --region "$REGION" --max-results 100 \
-                  --query "[length(VpcBlockPublicAccessExclusions[?ends_with(ResourceArn, ':vpc/$_TARGET_VPC_ID') && InternetGatewayExclusionMode == 'allow-bidirectional' && (State == 'create-complete' || State == 'update-complete')]), NextToken]" \
-                  --output text 2>/dev/null || echo "")
-              else
-                _BPA_PAGE=$(aws ec2 describe-vpc-block-public-access-exclusions \
-                  --region "$REGION" --max-results 100 --next-token "$_BPA_TOKEN" \
-                  --query "[length(VpcBlockPublicAccessExclusions[?ends_with(ResourceArn, ':vpc/$_TARGET_VPC_ID') && InternetGatewayExclusionMode == 'allow-bidirectional' && (State == 'create-complete' || State == 'update-complete')]), NextToken]" \
-                  --output text 2>/dev/null || echo "")
-              fi
-              [[ -n "$_BPA_PAGE" ]] || break
-              _BPA_COUNT=$(printf '%s' "$_BPA_PAGE" | awk '{print $1}')
-              _BPA_NEXT=$(printf '%s' "$_BPA_PAGE" | awk '{print $2}')
-              if [[ "$_BPA_COUNT" =~ ^[1-9][0-9]*$ ]]; then
-                _BPA_FOUND=1
-                break
-              fi
-              [[ -n "$_BPA_NEXT" && "$_BPA_NEXT" != "None" ]] || break
-              # Stop on a repeating or endless token instead of looping forever.
-              [[ "$_BPA_NEXT" != "$_BPA_PREV" ]] || break
-              _BPA_PAGES=$((_BPA_PAGES + 1))
-              [[ "$_BPA_PAGES" -lt 50 ]] || break
-              _BPA_PREV="$_BPA_TOKEN"
-              _BPA_TOKEN="$_BPA_NEXT"
-            done
-            if [[ "$_BPA_FOUND" == "1" ]]; then
+            # Known limitation: only the first 100 exclusions in the region are
+            # inspected; see the BPA section in deploy/cloudformation/README.md.
+            _BPA_COUNT=$(aws ec2 describe-vpc-block-public-access-exclusions \
+              --region "$REGION" --max-results 100 \
+              --query "length(VpcBlockPublicAccessExclusions[?ends_with(ResourceArn, ':vpc/$_TARGET_VPC_ID') && InternetGatewayExclusionMode == 'allow-bidirectional' && (State == 'create-complete' || State == 'update-complete')])" \
+              --output text 2>/dev/null || echo 0)
+            if [[ "$_BPA_COUNT" =~ ^[1-9][0-9]*$ ]]; then
               _BPA_READY=true
               break
             fi

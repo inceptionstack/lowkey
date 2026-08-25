@@ -101,6 +101,17 @@ aws ec2 delete-vpc-block-public-access-exclusion --exclusion-id <id>
 > **Warning**
 > A **new-VPC** exclusion is stack-owned and deleted with its stack. If another LowKey deployment was later pointed at that same VPC, deleting the first stack removes the exemption the second one depends on. Recreate an exclusion, or redeploy the remaining stack with `CreateVpcBpaExclusion=true`.
 
+### Limitation: first 100 exclusions only
+
+Exclusion discovery is deliberately not paginated. Both the installer and the instance-side check inspect only the **first 100** BPA exclusions in the region (`--max-results 100`). The default quota is well under that, so this is an accepted edge case for now.
+
+If an account holds more than 100 exclusions and the target VPC's exclusion falls outside that first page:
+
+- The installer treats it as absent and passes `CreateVpcBpaExclusion=true`, so CloudFormation attempts a duplicate and the stack fails with a create error.
+- The instance-side check likewise does not see it and refuses to start pack bootstrap, so the deployment fails closed rather than running without internet access.
+
+Workaround: pass `CreateVpcBpaExclusion=false` explicitly when you know the VPC already has a complete `allow-bidirectional` exclusion, or reduce the number of exclusions in the region.
+
 ## Next Steps
 
 See [Next Steps After Deployment](../README.md#next-steps-after-deployment) for bootstrap scripts setup.
