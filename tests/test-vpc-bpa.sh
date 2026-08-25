@@ -186,6 +186,14 @@ assert '--starting-token' not in template_text
 assert '--next-token' not in template_text
 assert '--max-results 100' in template_text
 assert '${!_PRIMARY_MAC%/}' in template_text
+# Failures in the BPA block must reach the ERR trap (which publishes SSM status
+# and signals CloudFormation); a bare 'exit' skips it and stalls until timeout.
+bpa_block = template_text[
+    template_text.index('# Fail closed before any pack code starts'):
+    template_text.index('# Ensure git is available')
+]
+assert 'exit 1' not in bpa_block
+assert bpa_block.count('false') >= 2
 bpa_check = template_text.index('aws ec2 describe-vpc-block-public-access-exclusions')
 git_clone = template_text.index('git clone --depth 1')
 pack_bootstrap = template_text.index('bash /tmp/lowkey/deploy/bootstrap.sh')

@@ -2037,7 +2037,9 @@ Resources:
             "http://169.254.169.254/latest/meta-data/network/interfaces/macs/$_PRIMARY_MAC/vpc-id")
           if [[ -z "$_TARGET_VPC_ID" ]]; then
             echo "FATAL: could not resolve the instance VPC before BPA validation" >&2
-            exit 1
+            # Fail via a failing command, not 'exit': only that triggers the ERR
+            # trap above, which publishes SSM status and signals CFN promptly.
+            false
           fi
 
           _BPA_READY=false
@@ -2057,7 +2059,8 @@ Resources:
           done
           if [[ "$_BPA_READY" != "true" ]]; then
             echo "FATAL: VPC $_TARGET_VPC_ID lacks a complete allow-bidirectional BPA exclusion; refusing to start pack bootstrap" >&2
-            exit 1
+            # Fail via a failing command, not 'exit', so the ERR trap reports it.
+            false
           fi
 
           # Ensure git is available (not present on all AMIs)
