@@ -1733,6 +1733,9 @@ check_permissions() {
   if [[ -n "$denied_actions" ]]; then
     warn "Some permissions may be missing: ${denied_actions}"
     confirm_or_abort "Continue anyway?"
+  elif [[ "$CALLER_ARN" == arn:*:sts::*:assumed-role/*/* ]]; then
+    warn "The underlying IAM role allows the requested deployment actions, but this simulation cannot evaluate restrictions from the active STS session policies."
+    confirm_or_abort "Continue with partially verified permissions?" "default_yes"
   else
     ok "Permissions verified"
   fi

@@ -85,11 +85,13 @@ test_assumed_role_resolution_failure_is_reported
 
 test_check_permissions_simulates_resolved_role() {
   local source_log="${TMPDIR}/simulation-source"
+  local warning_log="${TMPDIR}/assumed-role-warning"
+  local confirm_log="${TMPDIR}/assumed-role-confirm"
   CALLER_ARN='arn:aws:sts::123456789012:assumed-role/Admin/deploy-session'
   info() { :; }
-  warn() { printf 'unexpected warning: %s\n' "$*" >&2; return 1; }
-  confirm_or_abort() { printf 'unexpected confirmation: %s\n' "$*" >&2; return 1; }
-  ok() { printf '%s\n' "$*" > "${TMPDIR}/ok-message"; }
+  warn() { printf '%s\n' "$*" > "$warning_log"; }
+  confirm_or_abort() { printf '%s\n' "$*" > "$confirm_log"; }
+  ok() { printf 'must not claim full verification\n' > "${TMPDIR}/unexpected-ok"; }
   aws() {
     if [[ "$1 $2" == "iam get-role" ]]; then
       printf 'arn:aws:iam::123456789012:role/platform/Admin\n'
@@ -111,10 +113,34 @@ test_check_permissions_simulates_resolved_role() {
   check_permissions >/dev/null
   assert_eq "permission simulation uses resolved IAM role ARN" \
     "arn:aws:iam::123456789012:role/platform/Admin" "$(cat "$source_log")"
-  assert_eq "successful simulation reports verified permissions" \
-    "Permissions verified" "$(cat "${TMPDIR}/ok-message")"
+  assert_contains "assumed-role success warns about session-policy limits" \
+    "cannot evaluate restrictions from the active STS session policies" \
+    "$(cat "$warning_log")"
+  assert_eq "assumed-role success asks before partially verified continuation" \
+    "Continue with partially verified permissions? default_yes" \
+    "$(cat "$confirm_log")"
+  [[ ! -e "${TMPDIR}/unexpected-ok" ]] \
+    && pass "assumed-role success does not claim full verification" \
+    || fail_test "assumed-role success does not claim full verification"
 }
 test_check_permissions_simulates_resolved_role
+
+test_check_permissions_verifies_direct_iam_role() {
+  CALLER_ARN='arn:aws:iam::123456789012:role/platform/Admin'
+  info() { :; }
+  warn() { printf 'unexpected warning: %s\n' "$*" >&2; return 1; }
+  confirm_or_abort() { printf 'unexpected confirmation: %s\n' "$*" >&2; return 1; }
+  ok() { printf '%s\n' "$*" > "${TMPDIR}/direct-role-ok"; }
+  aws() {
+    [[ "$1 $2" == "iam simulate-principal-policy" ]] || return 99
+    return 0
+  }
+
+  check_permissions >/dev/null
+  assert_eq "direct IAM role success reports verified permissions" \
+    "Permissions verified" "$(cat "${TMPDIR}/direct-role-ok")"
+}
+test_check_permissions_verifies_direct_iam_role
 
 test_check_permissions_handles_resolution_failure() {
   local warning_log="${TMPDIR}/resolution-warning"
