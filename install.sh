@@ -1569,15 +1569,17 @@ resolve_vpc_bpa_exclusion() {
 
   local check_region="${DEPLOY_REGION:-$REGION}"
   local target_suffix=":vpc/${EXISTING_VPC_ID}"
-  local exclusion_json="" next_token="" page_json page_match
+  local exclusion_json="" next_token="" prev_token="" page_json page_match
+  local page_count=0
 
-  # This API is not auto-paginated by the AWS CLI, so follow NextToken
-  # explicitly. Missing a later page would hide an existing exclusion and
+  # This API has no AWS CLI paginator, so follow NextToken explicitly using the
+  # API's own --next-token flag (--starting-token only exists for paginated
+  # operations). Missing a later page would hide an existing exclusion and
   # cause a duplicate-create attempt.
   while :; do
     if [[ -n "$next_token" ]]; then
       page_json=$(aws ec2 describe-vpc-block-public-access-exclusions \
-        --region "$check_region" --max-results 100 --starting-token "$next_token" \
+        --region "$check_region" --max-results 100 --next-token "$next_token" \
         --output json 2>&1) || page_json=""
     else
       page_json=$(aws ec2 describe-vpc-block-public-access-exclusions \
@@ -1596,8 +1598,17 @@ resolve_vpc_bpa_exclusion() {
       break
     fi
 
+    prev_token="$next_token"
     next_token=$(printf '%s' "$page_json" | jq -r '.NextToken // empty')
     [[ -n "$next_token" ]] || break
+    # Fail closed rather than looping forever on a repeating or endless token.
+    if [[ "$next_token" == "$prev_token" ]]; then
+      fail "VPC BPA exclusion lookup in ${check_region} returned a repeating pagination token. Refusing to loop; rerun the wizard."
+    fi
+    page_count=$((page_count + 1))
+    if [[ "$page_count" -ge 50 ]]; then
+      fail "VPC BPA exclusion lookup in ${check_region} exceeded 50 pages without a result. Refusing to loop; rerun the wizard."
+    fi
   done
 
   [[ -n "$exclusion_json" ]] || return 0

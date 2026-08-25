@@ -2030,6 +2030,9 @@ Resources:
             -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
           _PRIMARY_MAC=$(curl -sf -H "X-aws-ec2-metadata-token: $_IMDS_TOKEN" \
             http://169.254.169.254/latest/meta-data/network/interfaces/macs/ | head -1)
+          # IMDS directory listings return each entry with a trailing slash;
+          # leaving it in would build a rejected double-slash vpc-id path.
+          _PRIMARY_MAC="${!_PRIMARY_MAC%/}"
           _TARGET_VPC_ID=$(curl -sf -H "X-aws-ec2-metadata-token: $_IMDS_TOKEN" \
             "http://169.254.169.254/latest/meta-data/network/interfaces/macs/$_PRIMARY_MAC/vpc-id")
           if [[ -z "$_TARGET_VPC_ID" ]]; then
@@ -2039,9 +2042,12 @@ Resources:
 
           _BPA_READY=false
           for _attempt in 1 2 3 4 5 6; do
-            # This API has no CLI paginator, so walk NextToken explicitly: one
-            # request per page, each returning "<match-count> <next-token>".
+            # This API has no CLI paginator, so walk NextToken explicitly with
+            # the API's own --next-token flag: one request per page, each
+            # returning "<match-count> <next-token>".
             _BPA_TOKEN="None"
+            _BPA_PREV=""
+            _BPA_PAGES=0
             _BPA_FOUND=0
             while :; do
               if [[ "$_BPA_TOKEN" == "None" ]]; then
@@ -2051,7 +2057,7 @@ Resources:
                   --output text 2>/dev/null || echo "")
               else
                 _BPA_PAGE=$(aws ec2 describe-vpc-block-public-access-exclusions \
-                  --region "$REGION" --max-results 100 --starting-token "$_BPA_TOKEN" \
+                  --region "$REGION" --max-results 100 --next-token "$_BPA_TOKEN" \
                   --query "[length(VpcBlockPublicAccessExclusions[?ends_with(ResourceArn, ':vpc/$_TARGET_VPC_ID') && InternetGatewayExclusionMode == 'allow-bidirectional' && (State == 'create-complete' || State == 'update-complete')]), NextToken]" \
                   --output text 2>/dev/null || echo "")
               fi
@@ -2063,6 +2069,11 @@ Resources:
                 break
               fi
               [[ -n "$_BPA_NEXT" && "$_BPA_NEXT" != "None" ]] || break
+              # Stop on a repeating or endless token instead of looping forever.
+              [[ "$_BPA_NEXT" != "$_BPA_PREV" ]] || break
+              _BPA_PAGES=$((_BPA_PAGES + 1))
+              [[ "$_BPA_PAGES" -lt 50 ]] || break
+              _BPA_PREV="$_BPA_TOKEN"
               _BPA_TOKEN="$_BPA_NEXT"
             done
             if [[ "$_BPA_FOUND" == "1" ]]; then

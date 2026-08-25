@@ -81,11 +81,25 @@ aws cloudformation create-stack-instances \
 
 The stack creates a VPC-wide `allow-bidirectional` VPC Block Public Access exclusion so bootstrap egress and public endpoints keep working when BPA is enabled. This exempts the **entire VPC** for internet ingress and egress, not only the LowKey instance.
 
-- New VPC: always created and owned by the stack (`CreateVpcBpaExclusion` is ignored).
-- Reused VPC with `CreateVpcBpaExclusion=true`: created with `DeletionPolicy: Retain` / `UpdateReplacePolicy: Retain`, so it survives stack deletion.
-- Reused VPC with `CreateVpcBpaExclusion=false`: nothing is created; the VPC must already have a complete `allow-bidirectional` exclusion.
+| `ExistingVpcId` | `CreateVpcBpaExclusion` | Behavior |
+|---|---|---|
+| empty (new VPC) | `true` | Stack-owned exclusion, deleted with the stack |
+| empty (new VPC) | `false` | Same as `true` — ignored, because a new VPC always needs one |
+| set (reused VPC) | `true` | Created with `DeletionPolicy: Retain` / `UpdateReplacePolicy: Retain`, so it survives stack deletion |
+| set (reused VPC) | `false` | Nothing created; the VPC must already have a complete `allow-bidirectional` exclusion |
 
 Reusing a VPC that already has one **requires** `CreateVpcBpaExclusion=false`, or the stack fails trying to create a duplicate. UserData revalidates the exclusion before running any pack and aborts if it is missing.
+
+Cleanup, once no deployment needs that VPC exempt:
+
+```bash
+aws ec2 describe-vpc-block-public-access-exclusions \
+  --query 'VpcBlockPublicAccessExclusions[].[ExclusionId,ResourceArn,State]' --output text
+aws ec2 delete-vpc-block-public-access-exclusion --exclusion-id <id>
+```
+
+> **Warning**
+> A **new-VPC** exclusion is stack-owned and deleted with its stack. If another LowKey deployment was later pointed at that same VPC, deleting the first stack removes the exemption the second one depends on. Recreate an exclusion, or redeploy the remaining stack with `CreateVpcBpaExclusion=true`.
 
 ## Next Steps
 

@@ -78,12 +78,14 @@ test_exclusion_on_second_page_is_found() {
   source "${TMPDIR}/functions.sh"
   EXISTING_VPC_ID="vpc-0123456789abcdef0"
   aws() {
-    local starting_token=""
+    local next_token=""
     while [[ $# -gt 0 ]]; do
-      [[ "$1" == "--starting-token" ]] && starting_token="$2"
+      # Reject the paginator-only flag: this operation has no CLI paginator.
+      [[ "$1" == "--starting-token" ]] && return 252
+      [[ "$1" == "--next-token" ]] && next_token="$2"
       shift
     done
-    if [[ -z "$starting_token" ]]; then
+    if [[ -z "$next_token" ]]; then
       cat <<'JSON'
 {"VpcBlockPublicAccessExclusions":[{"ExclusionId":"vpcbpa-excl-other","InternetGatewayExclusionMode":"allow-bidirectional","ResourceArn":"arn:aws:ec2:us-east-1:123456789012:vpc/vpc-fffffffffffffffff","State":"create-complete"}],"NextToken":"page2"}
 JSON
@@ -103,12 +105,13 @@ test_pagination_ends_without_match() {
   source "${TMPDIR}/functions.sh"
   EXISTING_VPC_ID="vpc-0123456789abcdef0"
   aws() {
-    local starting_token=""
+    local next_token=""
     while [[ $# -gt 0 ]]; do
-      [[ "$1" == "--starting-token" ]] && starting_token="$2"
+      [[ "$1" == "--starting-token" ]] && return 252
+      [[ "$1" == "--next-token" ]] && next_token="$2"
       shift
     done
-    if [[ -z "$starting_token" ]]; then
+    if [[ -z "$next_token" ]]; then
       printf '{"VpcBlockPublicAccessExclusions":[],"NextToken":"page2"}\n'
     else
       printf '{"VpcBlockPublicAccessExclusions":[]}\n'
@@ -118,6 +121,18 @@ test_pagination_ends_without_match() {
   assert_eq "exhausted pages without a match still creates" "true" "$CREATE_VPC_BPA_EXCLUSION"
 }
 test_pagination_ends_without_match
+
+# A service returning the same token forever must not hang the wizard.
+if (
+  source "${TMPDIR}/functions.sh"
+  EXISTING_VPC_ID="vpc-0123456789abcdef0"
+  aws() { printf '{"VpcBlockPublicAccessExclusions":[],"NextToken":"same"}\n'; }
+  resolve_vpc_bpa_exclusion
+) >/dev/null 2>&1; then
+  fail_test "repeating pagination token fails closed instead of looping"
+else
+  pass "repeating pagination token fails closed instead of looping"
+fi
 
 assert_reused_exclusion_rejected() {
   local state="$1" mode="$2" description="$3" reason="${4:-}"
@@ -194,7 +209,10 @@ template_text = open(sys.argv[1]).read()
 with open(sys.argv[1]) as stream:
     doc = yaml.load(stream, Loader=Loader)
 assert 'ec2:DescribeVpcBlockPublicAccessExclusions' in template_text
-assert '--starting-token "$_BPA_TOKEN"' in template_text
+assert '--next-token "$_BPA_TOKEN"' in template_text
+assert '--starting-token' not in template_text
+assert '"$_BPA_NEXT" != "$_BPA_PREV"' in template_text
+assert '${!_PRIMARY_MAC%/}' in template_text
 bpa_check = template_text.index('aws ec2 describe-vpc-block-public-access-exclusions')
 git_clone = template_text.index('git clone --depth 1')
 pack_bootstrap = template_text.index('bash /tmp/lowkey/deploy/bootstrap.sh')

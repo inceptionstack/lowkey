@@ -60,9 +60,10 @@ Every deployment needs its VPC exempt from [VPC Block Public Access](https://doc
 
 | `ExistingVpcId` | `CreateVpcBpaExclusion` | Behavior |
 |---|---|---|
-| empty (new VPC) | `true` or `false` | Always creates a stack-owned exclusion; the parameter is ignored because a new VPC always needs one |
-| set | `true` | Creates an exclusion with `DeletionPolicy: Retain` and `UpdateReplacePolicy: Retain`, so the shared VPC-wide exclusion outlives this stack |
-| set | `false` | Creates nothing; the VPC must already have a complete `allow-bidirectional` exclusion |
+| empty (new VPC) | `true` | Creates a stack-owned exclusion, deleted with the stack |
+| empty (new VPC) | `false` | Same as `true` — the parameter is ignored, because a new VPC always needs an exclusion |
+| set (reused VPC) | `true` | Creates an exclusion with `DeletionPolicy: Retain` and `UpdateReplacePolicy: Retain`, so the shared VPC-wide exclusion outlives this stack |
+| set (reused VPC) | `false` | Creates nothing; the VPC must already have a complete `allow-bidirectional` exclusion |
 
 Reusing a VPC that already has a complete exclusion **requires** `CreateVpcBpaExclusion=false` — otherwise CloudFormation attempts a duplicate exclusion and the stack fails. `install.sh` detects this and sets the parameter for you.
 
