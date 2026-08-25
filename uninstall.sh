@@ -232,6 +232,78 @@ select_targets() {
 # ============================================================================
 # Phase: Confirmation
 # ============================================================================
+# Print the lifecycle of the BPA exclusion owned by the stack selected for a VPC.
+# The output is one of: owned:<exclusion-id>, retained:<exclusion-id>, or none.
+# Reused-VPC exclusions use the retained logical resource and must not trigger a
+# warning when their creating stack is removed.
+vpc_bpa_lifecycle() {
+  local vpc_id="$1"
+  local stack_name stack_vpc resources
+  local stacks
+  stacks=$(aws cloudformation list-stacks \
+    --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE \
+    --region "$SCAN_REGION" \
+    --query 'StackSummaries[].StackName' --output text 2>/dev/null || echo "")
+
+  for stack_name in $stacks; do
+    stack_vpc=$(aws cloudformation describe-stack-resources \
+      --stack-name "$stack_name" --region "$SCAN_REGION" \
+      --query "StackResources[?ResourceType=='AWS::EC2::VPC'].PhysicalResourceId" \
+      --output text 2>/dev/null || echo "")
+    [[ "$stack_vpc" == "$vpc_id" ]] || continue
+
+    resources=$(aws cloudformation describe-stack-resources \
+      --stack-name "$stack_name" --region "$SCAN_REGION" \
+      --query "StackResources[?ResourceType=='AWS::EC2::VPCBlockPublicAccessExclusion'].[LogicalResourceId,PhysicalResourceId]" \
+      --output text 2>/dev/null || echo "")
+    while IFS=$'\t' read -r logical_id exclusion_id; do
+      case "$logical_id" in
+        VpcBpaExclusion)         echo "owned:${exclusion_id:-unknown}"; return 0 ;;
+        ExistingVpcBpaExclusion) echo "retained:${exclusion_id:-unknown}"; return 0 ;;
+      esac
+    done <<< "$resources"
+    return 0
+  done
+
+  echo "none"
+}
+
+# Return success when a non-selected Lowkey deployment still has a managed EC2
+# instance in the target VPC. The watermark is the deployment identity used by
+# the installer and is intentionally preferred over a raw instance count.
+vpc_has_other_lowkey_deployment() {
+  local vpc_id="$1" selected_watermark="$2"
+  local rows watermark
+  rows=$(aws ec2 describe-instances \
+    --filters "Name=vpc-id,Values=${vpc_id}" "Name=tag:loki:managed,Values=true" \
+    --region "$SCAN_REGION" \
+    --query 'Reservations[].Instances[?State.Name!=`terminated`].[InstanceId, Tags[?Key==`loki:watermark`].Value|[0]]' \
+    --output text 2>/dev/null || echo "")
+
+  while IFS=$'\t' read -r _ watermark; do
+    [[ -z "$watermark" || "$watermark" == "None" ]] && continue
+    [[ "$watermark" != "$selected_watermark" ]] && return 0
+  done <<< "$rows"
+  return 1
+}
+
+warn_shared_vpc_bpa() {
+  local idx="$1"
+  local vpc_id="${VPC_IDS[$idx]}" selected_watermark="${WATERMARKS[$idx]}"
+  local lifecycle exclusion_id
+
+  lifecycle=$(vpc_bpa_lifecycle "$vpc_id")
+  [[ "$lifecycle" == owned:* ]] || return 0
+  vpc_has_other_lowkey_deployment "$vpc_id" "$selected_watermark" || return 0
+
+  exclusion_id="${lifecycle#owned:}"
+  echo ""
+  warn "VPC ${vpc_id} is shared by multiple Lowkey deployments."
+  echo "  Removing ${selected_watermark} may delete VPC-wide BPA exclusion ${exclusion_id}."
+  echo "  Remaining deployment(s) may lose internet ingress and egress."
+  echo "  Recreate an allow-bidirectional exclusion, or redeploy the remaining stack with CreateVpcBpaExclusion=true."
+}
+
 confirm_destruction() {
   echo ""
   echo -e "  ${RED}${BOLD}╔══════════════════════════════════════════════════════╗${NC}"
@@ -244,6 +316,7 @@ confirm_destruction() {
   for i in "${TARGETS[@]}"; do
     echo -e "    ${RED}✗${NC} ${VPC_IDS[$i]}  (${WATERMARKS[$i]}) — VPC, EC2, IAM, all resources"
     print_teardown_plan "$i"
+    warn_shared_vpc_bpa "$i"
   done
 
   echo ""
