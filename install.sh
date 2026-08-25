@@ -1120,6 +1120,41 @@ verify_aws_credentials() {
 # Reusable AWS helpers
 # ============================================================================
 
+# Resolve the caller identity to an ARN accepted by IAM policy simulation.
+# STS assumed-role session ARNs are not valid policy sources, so look up the
+# underlying IAM role. get-role also preserves any path in the role ARN.
+resolve_policy_source_arn() {
+  local caller_arn="$1"
+  case "$caller_arn" in
+    arn:*:iam::*:user/*|arn:*:iam::*:role/*)
+      printf '%s\n' "$caller_arn"
+      ;;
+    arn:*:sts::*:assumed-role/*/*)
+      local assumed_role_suffix role_name role_arn
+      assumed_role_suffix="${caller_arn#*:assumed-role/}"
+      role_name="${assumed_role_suffix%%/*}"
+      if ! role_arn=$(aws iam get-role \
+          --role-name "$role_name" \
+          --query 'Role.Arn' \
+          --output text 2>&1); then
+        printf 'Could not resolve assumed role %s: %s\n' "$role_name" "$role_arn"
+        return 1
+      fi
+      case "$role_arn" in
+        arn:*:iam::*:role/*) printf '%s\n' "$role_arn" ;;
+        *)
+          printf 'IAM returned an invalid role ARN for %s: %s\n' "$role_name" "$role_arn"
+          return 1
+          ;;
+      esac
+      ;;
+    *)
+      printf 'Unsupported caller ARN for IAM policy simulation: %s\n' "$caller_arn"
+      return 1
+      ;;
+  esac
+}
+
 # Create a private S3 bucket with versioning + KMS encryption
 create_s3_bucket() {
   local bucket="$1" region="$2"
@@ -1676,9 +1711,15 @@ check_vpc_quota() {
 check_permissions() {
   echo ""
   info "Checking permissions..."
-  local denied_actions
+  local denied_actions policy_source_arn
+  if ! policy_source_arn=$(resolve_policy_source_arn "$CALLER_ARN"); then
+    warn "Could not resolve caller identity for deployment permission verification: ${policy_source_arn}"
+    confirm_or_abort "Continue without verified permissions?"
+    return 0
+  fi
+
   if ! denied_actions=$(aws iam simulate-principal-policy \
-      --policy-source-arn "$CALLER_ARN" \
+      --policy-source-arn "$policy_source_arn" \
       --action-names "cloudformation:CreateStack" "iam:CreateRole" "ec2:CreateVpc" \
         "ec2:CreateVpcBlockPublicAccessExclusion" "ec2:DescribeVpcBlockPublicAccessExclusions" \
         "ec2:ModifyVpcBlockPublicAccessExclusion" "ec2:DeleteVpcBlockPublicAccessExclusion" \
