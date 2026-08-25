@@ -45,6 +45,9 @@ check_contains "$CFN_TEMPLATE" "git clone --depth 1" "CFN: UserData uses git clo
 check_contains "$CFN_TEMPLATE" "deploy/bootstrap.sh" "CFN: UserData calls bootstrap.sh"
 check_contains "$CFN_TEMPLATE" "--pack" "CFN: UserData passes --pack flag"
 check_contains "$CFN_TEMPLATE" "Deployed agent pack" "CFN: PackName in Outputs"
+check_contains "$CFN_TEMPLATE" "AWS::EC2::VPCBlockPublicAccessExclusion" "CFN: VPC BPA exclusion resource defined"
+check_contains "$CFN_TEMPLATE" "InternetGatewayExclusionMode: allow-bidirectional" "CFN: VPC BPA exclusion allows bidirectional internet traffic"
+check_contains "$CFN_TEMPLATE" "CreateVpcBpaExclusion" "CFN: BPA exclusion creation parameter defined"
 
 echo ""
 

@@ -1,9 +1,11 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  OpenClaw Instance - Deploys a fully configured OpenClaw AI assistant on EC2
-  within its own VPC. Designed for StackSet deployment across AWS Organization accounts.
+  LowKey agent host on EC2 - provisions public VPC connectivity and a
+  bidirectional VPC Block Public Access exclusion for reliable bootstrap and ingress.
 
 Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@2
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
@@ -53,6 +55,7 @@ Metadata:
           - ExistingVpcId
           - ExistingSubnetId
           - ExistingSubnetId2
+          - CreateVpcBpaExclusion
           - SSHAllowedCidr
           - KeyPairName
       - Label:
@@ -368,6 +371,12 @@ Parameters:
     Description: "Second public subnet ID in a different AZ. Required for KiroCrew pack (ALB needs 2 AZs) when ExistingVpcId is set."
     AllowedPattern: '^(subnet-[a-z0-9]+)?$'
 
+  CreateVpcBpaExclusion:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: "Create a VPC-wide allow-bidirectional Block Public Access exclusion. The LowKey wizard sets this to false only when the reused VPC already has an active bidirectional exclusion."
+
   RepoBranch:
     Type: String
     Default: 'main'
@@ -463,6 +472,7 @@ Conditions:
   IsApiKey: !Equals [!Ref ModelMode, 'api-key']
   IsBedrock: !Equals [!Ref ModelMode, 'bedrock']
   CreateNewVpc: !Equals [!Ref ExistingVpcId, '']
+  ShouldCreateVpcBpaExclusion: !Equals [!Ref CreateVpcBpaExclusion, 'true']
   IsBuilder: !Equals [!Ref ProfileName, 'builder']
   IsNotBuilder: !Not [!Condition IsBuilder]
   IsAccountAssistant: !Equals [!Ref ProfileName, 'account_assistant']
@@ -503,6 +513,30 @@ Resources:
           Value: !Ref LokiWatermark
         - Key: loki:deploy-method
           Value: cloudformation
+        - Key: loki:pack
+          Value: !Ref PackName
+
+  # LowKey currently uses an IGW-backed public VPC for bootstrap and optional
+  # public endpoints. Keep the VPC reachable when regional BPA is enabled.
+  VpcBpaExclusion:
+    Type: AWS::EC2::VPCBlockPublicAccessExclusion
+    Condition: ShouldCreateVpcBpaExclusion
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Keep LowKey's IGW-backed VPC reachable when regional VPC BPA is enabled.
+        must:
+          - VPC-wide allow-bidirectional; bootstrap needs internet egress and public endpoints need ingress.
+        mutable: review-required
+    Properties:
+      InternetGatewayExclusionMode: allow-bidirectional
+      VpcId: !If [CreateNewVpc, !Ref VPC, !Ref ExistingVpcId]
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-vpc-bpa-exclusion'
+        - Key: loki:managed
+          Value: 'true'
+        - Key: loki:watermark
+          Value: !Ref LokiWatermark
         - Key: loki:pack
           Value: !Ref PackName
 
@@ -1838,6 +1872,13 @@ Resources:
   # --------------------------------------------------------------------------
   Instance:
     Type: AWS::EC2::Instance
+    Metadata:
+      # Optional dependency: when this stack creates the exclusion, wait for it
+      # before UserData attempts internet downloads. Existing exclusions need no wait.
+      VpcBpaExclusionDependency: !If
+        - ShouldCreateVpcBpaExclusion
+        - !Ref VpcBpaExclusion
+        - existing
     CreationPolicy:
       ResourceSignal:
         Timeout: PT30M
