@@ -275,11 +275,47 @@ vpc_bpa_lifecycle() {
 }
 
 # Return success when a non-selected Lowkey deployment still has a managed EC2
-# instance in the target VPC. The watermark is the deployment identity used by
-# the installer and is intentionally preferred over a raw instance count.
+# instance in the target VPC. The selected deployment is identified by the
+# instance owned by the first CloudFormation stack that owns this VPC, not by
+# LokiWatermark, because independent stacks may use the same watermark.
+vpc_stack_instance_ids() {
+  local vpc_id="$1"
+  local stack_name stack_vpc instances
+  local stacks
+  if ! stacks=$(aws cloudformation list-stacks \
+    --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE \
+    --region "$SCAN_REGION" \
+    --query 'StackSummaries[].StackName' --output text 2>/dev/null); then
+    return 2
+  fi
+
+  for stack_name in $stacks; do
+    if ! stack_vpc=$(aws cloudformation describe-stack-resources \
+      --stack-name "$stack_name" --region "$SCAN_REGION" \
+      --query "StackResources[?ResourceType=='AWS::EC2::VPC'].PhysicalResourceId" \
+      --output text 2>/dev/null); then
+      return 2
+    fi
+    [[ "$stack_vpc" == "$vpc_id" ]] || continue
+
+    if ! instances=$(aws cloudformation describe-stack-resources \
+      --stack-name "$stack_name" --region "$SCAN_REGION" \
+      --query "StackResources[?ResourceType=='AWS::EC2::Instance'].PhysicalResourceId" \
+      --output text 2>/dev/null); then
+      return 2
+    fi
+    printf '%s\n' "$instances"
+    return 0
+  done
+  return 1
+}
+
 vpc_has_other_lowkey_deployment() {
-  local vpc_id="$1" selected_watermark="$2"
-  local rows watermark
+  local vpc_id="$1"
+  local selected_instances rows instance_id watermark
+  if ! selected_instances=$(vpc_stack_instance_ids "$vpc_id"); then
+    return 2
+  fi
   if ! rows=$(aws ec2 describe-instances \
     --filters "Name=vpc-id,Values=${vpc_id}" "Name=tag:loki:managed,Values=true" \
     --region "$SCAN_REGION" \
@@ -288,9 +324,12 @@ vpc_has_other_lowkey_deployment() {
     return 2
   fi
 
-  while IFS=$'\t' read -r _ watermark; do
-    [[ -z "$watermark" || "$watermark" == "None" ]] && continue
-    [[ "$watermark" != "$selected_watermark" ]] && return 0
+  while IFS=$'\t' read -r instance_id watermark; do
+    [[ -z "$instance_id" || "$instance_id" == "None" ]] && continue
+    if grep -Fxq -- "$instance_id" <<< "$selected_instances"; then
+      continue
+    fi
+    return 0
   done <<< "$rows"
   return 1
 }
@@ -312,7 +351,7 @@ warn_shared_vpc_bpa() {
     return 0
   fi
   [[ "$lifecycle" == owned:* ]] || return 0
-  if vpc_has_other_lowkey_deployment "$vpc_id" "$selected_watermark"; then
+  if vpc_has_other_lowkey_deployment "$vpc_id"; then
     shared_status=0
   else
     shared_status=$?

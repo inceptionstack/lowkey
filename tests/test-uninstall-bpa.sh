@@ -58,11 +58,13 @@ aws() {
     failed-lifecycle:cloudformation:list-stacks)
       return 1
       ;;
-    shared:cloudformation:list-stacks|retained:cloudformation:list-stacks|single:cloudformation:list-stacks|failed-scan:cloudformation:list-stacks)
+    shared:cloudformation:list-stacks|retained:cloudformation:list-stacks|single:cloudformation:list-stacks|failed-scan:cloudformation:list-stacks|same-watermark:cloudformation:list-stacks)
       printf 'stack-target\n'
       ;;
-    shared:cloudformation:describe-stack-resources|retained:cloudformation:describe-stack-resources|single:cloudformation:describe-stack-resources|failed-scan:cloudformation:describe-stack-resources)
-      if [[ "$*" == *"ResourceType=='AWS::EC2::VPCBlockPublicAccessExclusion'"* ]]; then
+    shared:cloudformation:describe-stack-resources|retained:cloudformation:describe-stack-resources|single:cloudformation:describe-stack-resources|failed-scan:cloudformation:describe-stack-resources|same-watermark:cloudformation:describe-stack-resources)
+      if [[ "$*" == *"ResourceType=='AWS::EC2::Instance'"* ]]; then
+        printf 'i-target\n'
+      elif [[ "$*" == *"ResourceType=='AWS::EC2::VPCBlockPublicAccessExclusion'"* ]]; then
         case "$FAKE_SCENARIO" in
           retained) printf 'ExistingVpcBpaExclusion\tbpa-retained\n' ;;
           *)        printf 'VpcBpaExclusion\tbpa-owned\n' ;;
@@ -73,6 +75,9 @@ aws() {
       ;;
     shared:ec2:describe-instances|retained:ec2:describe-instances)
       printf 'i-target\ttarget\ni-other\tother\n'
+      ;;
+    same-watermark:ec2:describe-instances)
+      printf 'i-target\ttarget\ni-other\ttarget\n'
       ;;
     single:ec2:describe-instances)
       printf 'i-target\ttarget\n'
@@ -92,6 +97,10 @@ output=$(warn_shared_vpc_bpa 0)
 assert_contains "shared VPC warning names the VPC" "VPC vpc-target is shared" "$output"
 assert_contains "shared VPC warning names the exclusion" "bpa-owned" "$output"
 assert_contains "shared VPC warning gives remediation" "CreateVpcBpaExclusion=true" "$output"
+
+FAKE_SCENARIO=same-watermark
+output=$(warn_shared_vpc_bpa 0)
+assert_contains "duplicate watermark still detects shared VPC" "VPC vpc-target is shared" "$output"
 
 FAKE_SCENARIO=retained
 output=$(warn_shared_vpc_bpa 0)
