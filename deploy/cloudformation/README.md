@@ -110,7 +110,7 @@ If an account holds more than 100 exclusions and the target VPC's exclusion fall
 - The installer treats it as absent and passes `CreateVpcBpaExclusion=true`, so CloudFormation attempts a duplicate and the stack fails with a create error.
 - The instance-side check likewise does not see it and refuses to start pack bootstrap, so the deployment fails closed rather than running without internet access.
 
-Workaround: pass `CreateVpcBpaExclusion=false` explicitly when you know the VPC already has a complete `allow-bidirectional` exclusion, or reduce the number of exclusions in the region.
+Workaround: none that keeps the deployment working. Setting `CreateVpcBpaExclusion=false` only avoids the duplicate-create failure — the instance-side check reads the same first 100 results, so bootstrap still refuses to start. Deploying into such a region requires bringing the region's exclusion count back under 100, so the target VPC's exclusion appears in the first page of results.
 
 ## Next Steps
 

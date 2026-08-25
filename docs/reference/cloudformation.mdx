@@ -70,7 +70,7 @@ Reusing a VPC that already has a complete exclusion **requires** `CreateVpcBpaEx
 Before cloning the repo or running any pack, UserData verifies its own VPC has a complete `allow-bidirectional` exclusion and aborts if it does not, so a misconfigured direct deployment fails closed instead of bootstrapping without connectivity.
 
 <Info>
-**Limitation — first 100 exclusions only.** Discovery is not paginated: the installer and the instance-side check inspect only the first 100 BPA exclusions in the region. The default quota is far below that, so this is an accepted edge case. In a region holding more, an exclusion outside that first page reads as absent — the stack then fails on a duplicate create, and bootstrap refuses to start rather than running unexempted. Pass `CreateVpcBpaExclusion=false` explicitly when you know the VPC already has one.
+**Limitation — first 100 exclusions only.** Discovery is not paginated: the installer and the instance-side check each inspect only the first 100 BPA exclusions in the region. The default quota is far below that, so this is an accepted edge case. In a region holding more, an exclusion outside that first page reads as absent — the stack fails on a duplicate create, and bootstrap refuses to start rather than running unexempted. Setting `CreateVpcBpaExclusion=false` is **not** a workaround: it avoids the duplicate create, but the instance-side check reads the same first 100 results and still aborts. Deploying into such a region requires bringing the region's exclusion count back under 100.
 </Info>
 
 ## Deploying the template directly
