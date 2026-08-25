@@ -2634,7 +2634,9 @@ show_summary() {
     summary+="Bedrock       ${BEDROCK_REGION} (cross-region inference)\n"
   fi
   [[ -n "${EXISTING_VPC_ID:-}" ]] && summary+="VPC           reuse ${EXISTING_VPC_ID}\n"
-  summary+="BPA exclusion: ${VPC_BPA_EXCLUSION_STATUS:-will be created} (allows internet ingress to this VPC)\n"
+  local bpa_management_note=""
+  [[ "${CREATE_VPC_BPA_EXCLUSION:-true}" == "false" ]] && bpa_management_note="; external, not managed by this stack"
+  summary+="BPA exclusion: ${VPC_BPA_EXCLUSION_STATUS:-will be created} (VPC-wide bidirectional; allows internet ingress to this VPC and internet egress${bpa_management_note})\n"
   summary+="Security      ${security_summary}\n"
   summary+="Environment   ${ENV_NAME}"
 
