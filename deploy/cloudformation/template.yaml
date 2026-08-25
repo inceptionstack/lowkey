@@ -914,6 +914,16 @@ Resources:
                   - secretsmanager:GetSecretValue
                   - secretsmanager:DescribeSecret
                 Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${KirocrewTgBotTokenSecret}*'
+        # Revalidate the VPC-wide prerequisite immediately before bootstrap.
+        # Inline attachment avoids an IAM propagation race at instance launch.
+        - PolicyName: !Sub '${EnvironmentName}-vpc-bpa-read'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: VerifyVpcBpaExclusion
+                Effect: Allow
+                Action: ec2:DescribeVpcBlockPublicAccessExclusions
+                Resource: '*'
       Tags:
         - Key: Name
           Value: !Sub '${EnvironmentName}-role'
@@ -2007,6 +2017,38 @@ Resources:
               aws cloudformation signal-resource --stack-name "${!STACK_NAME}" --logical-resource-id Instance --unique-id "$_INSTANCE_ID" --status FAILURE --region "$REGION" 2>/dev/null || true
             fi
           ' ERR
+          # Fail closed before any pack code starts. This revalidates exclusions
+          # supplied by reused VPCs and protects direct CloudFormation callers
+          # that bypass the installer's pre-deployment check.
+          _IMDS_TOKEN=$(curl -sf -X PUT http://169.254.169.254/latest/api/token \
+            -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
+          _PRIMARY_MAC=$(curl -sf -H "X-aws-ec2-metadata-token: $_IMDS_TOKEN" \
+            http://169.254.169.254/latest/meta-data/network/interfaces/macs/ | head -1)
+          _TARGET_VPC_ID=$(curl -sf -H "X-aws-ec2-metadata-token: $_IMDS_TOKEN" \
+            "http://169.254.169.254/latest/meta-data/network/interfaces/macs/$_PRIMARY_MAC/vpc-id")
+          if [[ -z "$_TARGET_VPC_ID" ]]; then
+            echo "FATAL: could not resolve the instance VPC before BPA validation" >&2
+            exit 1
+          fi
+
+          _BPA_READY=false
+          for _attempt in 1 2 3 4 5 6; do
+            _BPA_MATCHES=$(aws ec2 describe-vpc-block-public-access-exclusions \
+              --region "$REGION" --max-results 100 \
+              --query "length(VpcBlockPublicAccessExclusions[?ends_with(ResourceArn, ':vpc/$_TARGET_VPC_ID') && InternetGatewayExclusionMode == 'allow-bidirectional' && (State == 'create-complete' || State == 'update-complete')])" \
+              --output text 2>/dev/null || echo 0)
+            if [[ "$_BPA_MATCHES" =~ ^[1-9][0-9]*$ ]]; then
+              _BPA_READY=true
+              break
+            fi
+            echo "VPC BPA exclusion not ready (attempt $_attempt/6); retrying in 10s..."
+            sleep 10
+          done
+          if [[ "$_BPA_READY" != "true" ]]; then
+            echo "FATAL: VPC $_TARGET_VPC_ID lacks a complete allow-bidirectional BPA exclusion; refusing to start pack bootstrap" >&2
+            exit 1
+          fi
+
           # Ensure git is available (not present on all AMIs)
           command -v git &>/dev/null || dnf install -y git 2>/dev/null || yum install -y git
           # Clone repo with retry (GitHub blips shouldn't kill bootstrap)

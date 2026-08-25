@@ -145,8 +145,15 @@ Loader.add_multi_constructor(
     if isinstance(node, yaml.SequenceNode)
     else loader.construct_mapping(node),
 )
+template_text = open(sys.argv[1]).read()
 with open(sys.argv[1]) as stream:
     doc = yaml.load(stream, Loader=Loader)
+assert 'ec2:DescribeVpcBlockPublicAccessExclusions' in template_text
+bpa_check = template_text.index('aws ec2 describe-vpc-block-public-access-exclusions')
+git_clone = template_text.index('git clone --depth 1')
+pack_bootstrap = template_text.index('bash /tmp/lowkey/deploy/bootstrap.sh')
+assert bpa_check < git_clone < pack_bootstrap
+assert 'refusing to start pack bootstrap' in template_text
 param = doc['Parameters']['CreateVpcBpaExclusion']
 assert param['Default'] == 'true'
 assert param['AllowedValues'] == ['true', 'false']
