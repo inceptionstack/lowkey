@@ -543,6 +543,38 @@ else
   info "Pack requests no data volume — skipping mount"
 fi
 
+# ---- KiroCrew workspace data-volume mapping ----
+step "KiroCrew Workspace Mount"
+if [[ "${PACK_NAME}" == "kirocrew" && "${DATA_VOL_GB}" -gt 0 && -d /mnt/ebs-data ]]; then
+  mkdir -p /mnt/ebs-data/workplace
+  if ! mountpoint -q /home/ec2-user/workplace; then
+    if [[ -L /home/ec2-user/workplace ]]; then
+      rm -f /home/ec2-user/workplace
+    elif [[ -d /home/ec2-user/workplace ]]; then
+      if find /home/ec2-user/workplace -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+        cp -a /home/ec2-user/workplace/. /mnt/ebs-data/workplace/
+      fi
+      rm -rf /home/ec2-user/workplace
+    elif [[ -e /home/ec2-user/workplace ]]; then
+      fail "KiroCrew workspace path exists but is not a directory"
+      exit 1
+    fi
+    mkdir -p /home/ec2-user/workplace
+    mount --bind /mnt/ebs-data/workplace /home/ec2-user/workplace
+  fi
+  if ! grep -qF "/mnt/ebs-data/workplace /home/ec2-user/workplace none bind 0 0" /etc/fstab; then
+    echo "/mnt/ebs-data/workplace /home/ec2-user/workplace none bind 0 0" >> /etc/fstab
+  fi
+  chown ec2-user:ec2-user /mnt/ebs-data/workplace /home/ec2-user/workplace
+  ok "Bind-mounted KiroCrew workplace -> /mnt/ebs-data/workplace"
+elif [[ "${PACK_NAME}" == "kirocrew" ]]; then
+  mkdir -p /home/ec2-user/workplace
+  chown ec2-user:ec2-user /home/ec2-user/workplace
+  info "KiroCrew workspace uses the root volume because no data volume is available"
+else
+  info "KiroCrew workspace mount: skipped for ${PACK_NAME}"
+fi
+
 # ---- Enable systemd user session for ec2-user (needed by openclaw gateway) ----
 loginctl enable-linger ec2-user 2>/dev/null || true
 # Wait for user runtime dir — linger starts the user manager asynchronously
