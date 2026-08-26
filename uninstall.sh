@@ -232,80 +232,79 @@ select_targets() {
 # ============================================================================
 # Phase: Confirmation
 # ============================================================================
+# Resolve the CloudFormation stack that owns a VPC from the resource's
+# CloudFormation system tag. Do not enumerate every stack in the account: an
+# unrelated stack may be inaccessible even when the selected VPC's stack is
+# readable, and that should not block teardown of the selected deployment.
+vpc_cloudformation_stack_name() {
+  local vpc_id="$1" stack_name
+  if stack_name=$(aws ec2 describe-tags \
+    --filters "Name=resource-id,Values=${vpc_id}" \
+              "Name=key,Values=aws:cloudformation:stack-name" \
+    --region "$SCAN_REGION" \
+    --query 'Tags[0].Value' --output text 2>/dev/null); then
+    [[ -n "$stack_name" && "$stack_name" != "None" ]] || return 1
+    printf '%s\n' "$stack_name"
+    return 0
+  fi
+  return 2
+}
+
 # Print the lifecycle of the BPA exclusion owned by the stack selected for a VPC.
 # The output is one of: owned:<exclusion-id>, retained:<exclusion-id>, or none.
 # Reused-VPC exclusions use the retained logical resource and must not trigger a
 # warning when their creating stack is removed.
 vpc_bpa_lifecycle() {
   local vpc_id="$1"
-  local stack_name stack_vpc resources
-  local stacks
-  if ! stacks=$(aws cloudformation list-stacks \
-    --region "$SCAN_REGION" \
-    --query 'StackSummaries[?StackStatus!=`DELETE_COMPLETE` && StackStatus!=`DELETE_IN_PROGRESS`].StackName' --output text 2>/dev/null); then
+  local stack_name resources stack_status
+
+  if stack_name=$(vpc_cloudformation_stack_name "$vpc_id"); then
+    :
+  else
+    stack_status=$?
+    [[ "$stack_status" -eq 1 ]] && { echo "none"; return 0; }
     return 2
   fi
 
-  for stack_name in $stacks; do
-    if ! stack_vpc=$(aws cloudformation describe-stack-resources \
-      --stack-name "$stack_name" --region "$SCAN_REGION" \
-      --query "StackResources[?ResourceType=='AWS::EC2::VPC'].PhysicalResourceId" \
-      --output text 2>/dev/null); then
-      return 2
-    fi
-    [[ "$stack_vpc" == "$vpc_id" ]] || continue
-
-    if ! resources=$(aws cloudformation describe-stack-resources \
-      --stack-name "$stack_name" --region "$SCAN_REGION" \
-      --query "StackResources[?ResourceType=='AWS::EC2::VPCBlockPublicAccessExclusion'].[LogicalResourceId,PhysicalResourceId]" \
-      --output text 2>/dev/null); then
-      return 2
-    fi
-    while IFS=$'\t' read -r logical_id exclusion_id; do
-      case "$logical_id" in
-        VpcBpaExclusion)         echo "owned:${exclusion_id:-unknown}"; return 0 ;;
-        ExistingVpcBpaExclusion) echo "retained:${exclusion_id:-unknown}"; return 0 ;;
-      esac
-    done <<< "$resources"
-    return 0
-  done
-
+  if ! resources=$(aws cloudformation describe-stack-resources \
+    --stack-name "$stack_name" --region "$SCAN_REGION" \
+    --query "StackResources[?ResourceType=='AWS::EC2::VPCBlockPublicAccessExclusion'].[LogicalResourceId,PhysicalResourceId]" \
+    --output text 2>/dev/null); then
+    return 2
+  fi
+  while IFS=$'\t' read -r logical_id exclusion_id; do
+    case "$logical_id" in
+      VpcBpaExclusion)         echo "owned:${exclusion_id:-unknown}"; return 0 ;;
+      ExistingVpcBpaExclusion) echo "retained:${exclusion_id:-unknown}"; return 0 ;;
+    esac
+  done <<< "$resources"
   echo "none"
 }
 
 # Return success when a non-selected Lowkey deployment still has a managed EC2
 # instance in the target VPC. The selected deployment is identified by the
-# instance owned by the first CloudFormation stack that owns this VPC, not by
+# instance owned by the CloudFormation stack tagged on this VPC, not by
 # LokiWatermark, because independent stacks may use the same watermark.
 vpc_stack_instance_ids() {
   local vpc_id="$1"
-  local stack_name stack_vpc instances
-  local stacks
-  if ! stacks=$(aws cloudformation list-stacks \
-    --region "$SCAN_REGION" \
-    --query 'StackSummaries[?StackStatus!=`DELETE_COMPLETE` && StackStatus!=`DELETE_IN_PROGRESS`].StackName' --output text 2>/dev/null); then
+  local stack_name instances stack_status
+
+  if stack_name=$(vpc_cloudformation_stack_name "$vpc_id"); then
+    :
+  else
+    stack_status=$?
+    [[ "$stack_status" -eq 1 ]] && return 1
     return 2
   fi
 
-  for stack_name in $stacks; do
-    if ! stack_vpc=$(aws cloudformation describe-stack-resources \
-      --stack-name "$stack_name" --region "$SCAN_REGION" \
-      --query "StackResources[?ResourceType=='AWS::EC2::VPC'].PhysicalResourceId" \
-      --output text 2>/dev/null); then
-      return 2
-    fi
-    [[ "$stack_vpc" == "$vpc_id" ]] || continue
-
-    if ! instances=$(aws cloudformation describe-stack-resources \
-      --stack-name "$stack_name" --region "$SCAN_REGION" \
-      --query "StackResources[?ResourceType=='AWS::EC2::Instance'].PhysicalResourceId" \
-      --output text 2>/dev/null); then
-      return 2
-    fi
-    printf '%s\n' "$instances"
-    return 0
-  done
-  return 1
+  if ! instances=$(aws cloudformation describe-stack-resources \
+    --stack-name "$stack_name" --region "$SCAN_REGION" \
+    --query "StackResources[?ResourceType=='AWS::EC2::Instance'].PhysicalResourceId" \
+    --output text 2>/dev/null); then
+    return 2
+  fi
+  printf '%s\n' "$instances"
+  return 0
 }
 
 vpc_has_other_lowkey_deployment() {
@@ -465,44 +464,35 @@ remove_deployment() {
 # ============================================================================
 try_delete_cfn_stack() {
   local vpc_id="$1"
-  local stacks
-  if ! stacks=$(aws cloudformation list-stacks \
-    --region "$SCAN_REGION" \
-    --query 'StackSummaries[?StackStatus!=`DELETE_COMPLETE` && StackStatus!=`DELETE_IN_PROGRESS`].StackName' --output text 2>/dev/null); then
-    warn "Could not inspect CloudFormation stacks for VPC ${vpc_id}; refusing to remove it."
-    return 2
-  fi
+  local stack_name stack_status
 
-  for stack_name in $stacks; do
-    local stack_vpc
-    if ! stack_vpc=$(aws cloudformation describe-stack-resources \
-      --stack-name "$stack_name" --region "$SCAN_REGION" \
-      --query "StackResources[?ResourceType=='AWS::EC2::VPC'].PhysicalResourceId" \
-      --output text 2>/dev/null); then
-      warn "Could not inspect CloudFormation stack ${stack_name} for VPC ${vpc_id}; refusing to remove it."
+  if stack_name=$(vpc_cloudformation_stack_name "$vpc_id"); then
+    :
+  else
+    stack_status=$?
+    if [[ "$stack_status" -eq 2 ]]; then
+      warn "Could not inspect CloudFormation ownership for VPC ${vpc_id}; refusing to remove it."
       return 2
     fi
+    return 1
+  fi
 
-    [[ "$stack_vpc" == *"$vpc_id"* ]] || continue
+  info "Found CloudFormation stack: ${stack_name}"
+  info "Deleting stack (this takes 5-10 minutes)..."
+  aws cloudformation delete-stack --stack-name "$stack_name" --region "$SCAN_REGION"
 
-    info "Found CloudFormation stack: ${stack_name}"
-    info "Deleting stack (this takes 5-10 minutes)..."
-    aws cloudformation delete-stack --stack-name "$stack_name" --region "$SCAN_REGION"
-
-    while true; do
-      local status
-      status=$(aws cloudformation describe-stacks --stack-name "$stack_name" --region "$SCAN_REGION" \
-        --query 'Stacks[0].StackStatus' --output text 2>&1 || echo "DELETE_COMPLETE")
-      echo -ne "\r  Status: ${status}              "
-      case "$status" in
-        DELETE_COMPLETE)     echo ""; return 0 ;;
-        *DELETE_FAILED*)     echo ""; warn "Stack delete failed — will try manual cleanup"; return 1 ;;
-        *does\ not\ exist*) echo ""; return 0 ;;
-        *)                   sleep 15 ;;
-      esac
-    done
+  while true; do
+    local status
+    status=$(aws cloudformation describe-stacks --stack-name "$stack_name" --region "$SCAN_REGION" \
+      --query 'Stacks[0].StackStatus' --output text 2>&1 || echo "DELETE_COMPLETE")
+    echo -ne "\r  Status: ${status}              "
+    case "$status" in
+      DELETE_COMPLETE)     echo ""; return 0 ;;
+      *DELETE_FAILED*)     echo ""; warn "Stack delete failed — will try manual cleanup"; return 1 ;;
+      *does\ not\ exist*) echo ""; return 0 ;;
+      *)                   sleep 15 ;;
+    esac
   done
-  return 1
 }
 
 # ============================================================================
