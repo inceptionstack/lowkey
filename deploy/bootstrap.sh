@@ -562,8 +562,10 @@ if [[ "${PACK_NAME}" == "kirocrew" && "${DATA_VOL_GB}" -gt 0 && -d /mnt/ebs-data
     mkdir -p /home/ec2-user/workplace
     mount --bind /mnt/ebs-data/workplace /home/ec2-user/workplace
   fi
-  if ! grep -qF "/mnt/ebs-data/workplace /home/ec2-user/workplace none bind 0 0" /etc/fstab; then
-    echo "/mnt/ebs-data/workplace /home/ec2-user/workplace none bind 0 0" >> /etc/fstab
+  WORKPLACE_FSTAB_ENTRY="/mnt/ebs-data/workplace /home/ec2-user/workplace none bind,nofail,x-systemd.requires-mounts-for=/mnt/ebs-data 0 0"
+  sed -i '\|^/mnt/ebs-data/workplace /home/ec2-user/workplace none bind 0 0$|d' /etc/fstab
+  if ! grep -qF "${WORKPLACE_FSTAB_ENTRY}" /etc/fstab; then
+    printf '%s\n' "${WORKPLACE_FSTAB_ENTRY}" >> /etc/fstab
   fi
   chown ec2-user:ec2-user /mnt/ebs-data/workplace /home/ec2-user/workplace
   ok "Bind-mounted KiroCrew workplace -> /mnt/ebs-data/workplace"

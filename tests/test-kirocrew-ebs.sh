@@ -69,8 +69,8 @@ assert_bootstrap_contains \
   'mount --bind /mnt/ebs-data/workplace /home/ec2-user/workplace' \
   "bootstrap bind-mounts the EBS workplace directory"
 assert_bootstrap_contains \
-  '/mnt/ebs-data/workplace /home/ec2-user/workplace none bind 0 0' \
-  "bootstrap persists the workplace bind mount across reboots"
+  '/mnt/ebs-data/workplace /home/ec2-user/workplace none bind,nofail,x-systemd.requires-mounts-for=/mnt/ebs-data 0 0' \
+  "bootstrap persists a non-fatal workplace bind mount after the data volume"
 if grep -Fq 'ReadWritePaths=/home/ec2-user/workplace' "$SERVICE"; then
   pass "KiroCrew gateway can write to the EBS-backed workplace"
 else
