@@ -68,16 +68,24 @@ aws() {
       ;;
     inaccessible-unrelated:cloudformation:delete-stack)
       ;;
+    lifecycle-failure:cloudformation:describe-stacks)
+      printf 'DELETE_COMPLETE\n'
+      ;;
+    lifecycle-failure:cloudformation:delete-stack)
+      ;;
     failed-lifecycle:cloudformation:list-stacks)
       return 1
       ;;
     shared:cloudformation:list-stacks|retained:cloudformation:list-stacks|single:cloudformation:list-stacks|failed-scan:cloudformation:list-stacks|same-watermark:cloudformation:list-stacks)
       printf 'stack-target\n'
       ;;
-    shared:ec2:describe-tags|retained:ec2:describe-tags|single:ec2:describe-tags|failed-scan:ec2:describe-tags|same-watermark:ec2:describe-tags|rollback-complete:ec2:describe-tags|inaccessible-unrelated:ec2:describe-tags)
+    shared:ec2:describe-tags|retained:ec2:describe-tags|single:ec2:describe-tags|failed-scan:ec2:describe-tags|same-watermark:ec2:describe-tags|rollback-complete:ec2:describe-tags|inaccessible-unrelated:ec2:describe-tags|lifecycle-failure:ec2:describe-tags)
       printf 'stack-target\n'
       ;;
     failed-lifecycle:ec2:describe-tags)
+      return 1
+      ;;
+    lifecycle-failure:cloudformation:describe-stack-resources)
       return 1
       ;;
     shared:cloudformation:describe-stack-resources|retained:cloudformation:describe-stack-resources|single:cloudformation:describe-stack-resources|failed-scan:cloudformation:describe-stack-resources|same-watermark:cloudformation:describe-stack-resources|rollback-complete:cloudformation:describe-stack-resources|inaccessible-unrelated:cloudformation:describe-stack-resources)
@@ -133,6 +141,14 @@ delete_status=$?
 set -e
 assert_status "inaccessible unrelated stack does not block selected stack deletion" 0 "$delete_status"
 assert_contains "selected stack is resolved from VPC tag" "Found CloudFormation stack: stack-target" "$output"
+
+FAKE_SCENARIO=lifecycle-failure
+set +e
+output=$(try_delete_cfn_stack "vpc-target")
+delete_status=$?
+set -e
+assert_status "selected stack lifecycle inspection failure blocks deletion" 2 "$delete_status"
+assert_contains "selected stack lifecycle refusal names inspection failure" "refusing to remove it" "$output"
 
 FAKE_SCENARIO=rollback-complete
 output=$(warn_shared_vpc_bpa 0)

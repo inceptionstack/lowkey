@@ -464,7 +464,7 @@ remove_deployment() {
 # ============================================================================
 try_delete_cfn_stack() {
   local vpc_id="$1"
-  local stack_name stack_status
+  local stack_name stack_status stack_vpc
 
   if stack_name=$(vpc_cloudformation_stack_name "$vpc_id"); then
     :
@@ -476,6 +476,15 @@ try_delete_cfn_stack() {
     fi
     return 1
   fi
+
+  if ! stack_vpc=$(aws cloudformation describe-stack-resources \
+    --stack-name "$stack_name" --region "$SCAN_REGION" \
+    --query "StackResources[?ResourceType=='AWS::EC2::VPC'].PhysicalResourceId" \
+    --output text 2>/dev/null); then
+    warn "Could not inspect CloudFormation stack ${stack_name} for VPC ${vpc_id}; refusing to remove it."
+    return 2
+  fi
+  [[ "$stack_vpc" == *"$vpc_id"* ]] || return 1
 
   info "Found CloudFormation stack: ${stack_name}"
   info "Deleting stack (this takes 5-10 minutes)..."
