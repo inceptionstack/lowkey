@@ -171,7 +171,7 @@ provides:
 
 instance_type: t4g.medium
 root_volume_gb: 40
-data_volume_gb: 0
+data_volume_gb: 80
 
 experimental: true
 ```
