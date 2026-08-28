@@ -1,6 +1,6 @@
 # Lowkey Docs
 
-Mintlify-powered documentation for Lowkey. Source of truth for [docs.lowkey.run](https://docs.lowkey.run) (when deployed).
+Mintlify-powered documentation for Lowkey. Source of truth for [lokiagent.dev](https://lokiagent.dev) (official homepage) and [docs.lowkey.run](https://docs.lowkey.run) (deployed docs).
 
 ## Structure
 

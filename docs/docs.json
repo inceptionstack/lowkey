@@ -3,6 +3,7 @@
   "theme": "mint",
   "name": "Lowkey",
   "description": "Self-hosted AI coding agents on AWS — OpenClaw, Claude Code, Codex, Kiro, NemoClaw, Hermes, and more.",
+  "homepage": "https://lokiagent.dev",
   "colors": {
     "primary": "#7C3AED",
     "light": "#A78BFA",

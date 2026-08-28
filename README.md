@@ -1,4 +1,7 @@
 # Self-Hosted AI Coding Agents on AWS — OpenClaw, Claude Code, Codex, Kiro, NemoClaw, Hermes
+
+**📖 Homepage:** [lokiagent.dev](https://lokiagent.dev)
+
 [![Lowkey Agent Demo](https://img.youtube.com/vi/dJSk8DYlHvI/maxresdefault.jpg)](https://www.youtube.com/watch?v=dJSk8DYlHvI)
 
 ▶️ [Watch the full walkthrough on YouTube](https://www.youtube.com/watch?v=dJSk8DYlHvI)
