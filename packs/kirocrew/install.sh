@@ -29,7 +29,7 @@ PACK_ARG_REGION="$(pack_config_get region "us-east-1")"
 PACK_ARG_FROM_SECRET="$(pack_config_get from-secret "")"
 PACK_ARG_API_KEY="$(pack_config_get kiro-api-key "")"
 PACK_ARG_CHANNEL="$(pack_config_get channel "stable")"
-PACK_ARG_KIROCREW_VERSION="$(pack_config_get kirocrew-version "0.3.0")"
+PACK_ARG_KIROCREW_VERSION="$(pack_config_get kirocrew-version "0.4.1rc1")"
 PACK_ARG_EXTRAS="$(pack_config_get extras "aws,voice")"
 PACK_ARG_GATEWAY_PORT="$(pack_config_get gateway-port "5476")"
 PACK_ARG_START_GATEWAY="$(pack_config_get start-gateway "true")"
@@ -53,12 +53,15 @@ Options:
   --from-secret        Secrets Manager id/arn for Kiro API key      [default: ""]
   --channel            KiroCrew release channel                     [default: stable]
                        (stable | nightly | insider)
-  --kirocrew-version   Pin KiroCrew version                         [default: 0.3.0]
+  --kirocrew-version   Pin KiroCrew version                         [default: 0.4.1rc1]
                        Channel and version BOTH form the download path
                        (cli/<channel>/<version>/cli-manifest.json), so they
-                       must be compatible. 0.3.0 was cut on the stable lane
-                       only: changing --channel without also passing a version
-                       that exists on that lane 403s and fails the install.
+                       must be compatible. This is the published ARTIFACT
+                       version, not the GitHub release tag: upstream tag
+                       v0.4.1 ships the CLI as 0.4.1rc1, so pinning "0.4.1"
+                       404s/403s even on stable. Confirm a pin resolves on
+                       its lane before changing either value; the stable lane
+                       publishes feed/stable/latest-cli.json naming it.
   --extras             Comma-separated pip extras (aws,voice)       [default: aws,voice]
   --gateway-port       KiroCrew gateway port                        [default: 5476]
   --start-gateway      Enable systemd service (true|false)          [default: true]
