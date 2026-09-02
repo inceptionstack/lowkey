@@ -186,6 +186,35 @@ else
   fail "install.sh --help does not exit 0"
 fi
 
+# ── version pin consistency ──────────────────────────────────────────────────
+# The pinned KiroCrew version is stated in three independent places. They drift
+# silently on a version bump, and a stale help/manifest value misleads operators
+# into passing a channel/version pair that was never published (403 install).
+header "version pin consistency"
+
+PIN_MANIFEST="$(python3 -c "
+import yaml
+d = yaml.safe_load(open('${MANIFEST}'))
+print(next(p['default'] for p in d.get('params', []) if p['name'] == 'kirocrew-version'))
+" 2>/dev/null || true)"
+
+PIN_CODE="$(sed -n 's/.*pack_config_get kirocrew-version "\([^"]*\)".*/\1/p' "${INSTALL}" | head -1)"
+
+PIN_HELP="$(bash "${INSTALL}" --help 2>/dev/null \
+  | sed -n 's/.*--kirocrew-version .*\[default: \([^]]*\)\].*/\1/p' | head -1)"
+
+if [[ -n "${PIN_MANIFEST}" && -n "${PIN_CODE}" && -n "${PIN_HELP}" ]]; then
+  pass "pinned version is discoverable in manifest, code, and help"
+else
+  fail "could not extract pin (manifest='${PIN_MANIFEST}' code='${PIN_CODE}' help='${PIN_HELP}')"
+fi
+
+if [[ "${PIN_MANIFEST}" == "${PIN_CODE}" && "${PIN_CODE}" == "${PIN_HELP}" ]]; then
+  pass "pin agrees across manifest, code fallback, and help (${PIN_CODE})"
+else
+  fail "pin disagrees: manifest='${PIN_MANIFEST}' code='${PIN_CODE}' help='${PIN_HELP}'"
+fi
+
 # ── arg parser exit codes ────────────────────────────────────────────────────
 header "arg parser exit codes"
 
