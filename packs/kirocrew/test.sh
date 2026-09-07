@@ -456,6 +456,12 @@ else
   fail "unit ReadWritePaths too narrow (should cover ~/.kiro)"
 fi
 
+if grep -Fxq 'Alias=kirocrew.service' "${UNIT}"; then
+  pass "unit exposes canonical kirocrew.service alias for service-aware restart"
+else
+  fail "unit missing kirocrew.service alias; kirocrew restart would bypass systemd"
+fi
+
 # ── Registry consistency ─────────────────────────────────────────────────────
 header "registry consistency"
 

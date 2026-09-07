@@ -36,3 +36,8 @@ PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
+# KiroCrew 0.5 service control looks for kirocrew.service. Keep LowKey's legacy
+# unit name for existing automation while exposing the canonical service alias,
+# so `kirocrew restart` restarts this 0.0.0.0-bound managed gateway instead of
+# replacing it with an unmanaged loopback-only process.
+Alias=kirocrew.service
