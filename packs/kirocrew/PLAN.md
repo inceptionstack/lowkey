@@ -53,7 +53,7 @@ Source: https://kiro.dev/docs/crew/installation.md
 
 | Step | Description | Notes |
 |------|-------------|-------|
-| 6 | Ensure Python ≥ 3.12 for KiroCrew v0.6.0 | KiroCrew v0.6.0 requires Python 3.12+. The official installer provisions a managed CPython 3.12 by default; this preflight keeps pipx and fallback paths on the same supported floor. On AL2023, if no supported interpreter is available, install `python3.12`. |
+| 6 | Discover Python ≥ 3.12 for optional pipx | KiroCrew v0.6.0 requires Python 3.12+. The official installer provisions a managed CPython 3.12 by default, so a host such as Ubuntu 22.04 may have no supported system interpreter and still install successfully. |
 | 7 | Install pipx (if not present) | KiroCrew installer prefers pipx; pre-install for cleaner management |
 | 8 | Run upstream KiroCrew installer | `curl -fsSL https://download.crew.kiro.dev/cli.sh \| sh -s -- --channel <channel> [--version <ver>]` |
 | 9 | Verify `kirocrew` binary in PATH | `kirocrew --version`; fail with actionable message if not found |
@@ -77,12 +77,12 @@ Source: https://kiro.dev/docs/crew/installation.md
 - Installs via **pipx** (preferred, if available) or a managed venv at `~/.kiro/crew-venv` (BESIDE the data home, not inside it)
 - Binary: `~/.local/bin/kirocrew`
 - Channels: `stable` (default), `nightly`, `insider` (env: `KIROCREW_CHANNEL`)
-- Requires: curl, openssl, Python ≥ 3.12, sha256sum/shasum
+- Requires: curl, openssl, and Python ≥ 3.12 only when using system Python; the default path provisions managed CPython 3.12, plus sha256sum/shasum
 
 ### Installer error handling:
 - If `download.crew.kiro.dev` is unreachable: `fail` with actionable message (check DNS/firewall/proxy)
 - If signature verification fails: upstream installer already aborts — we propagate
-- If Python < 3.12: attempt `dnf install python3.12` (AL2023) or fail with clear prereq message
+- If no supported system Python is available: skip pipx pre-installation and let the upstream installer provision managed CPython 3.12; an explicit system-Python opt-out fails with a clear prerequisite message
 
 ### Data home (`~/.kiro/crew/`, env: `KIROCREW_HOME`):
 ```
@@ -246,9 +246,9 @@ pack_banner "kirocrew"
 # ══════════════════════════════════════════════════════════════════════════
 
 # Step 6: Ensure Python ≥ 3.12
-#   - Check python3.12, python3.13, python3 (in order)
-#   - On AL2023 if none ≥3.12: dnf install python3.12
-#   - Fail with clear message if still not available
+#   - Discover python3.12, python3.13, python3 for optional pipx use
+#   - If no supported system Python exists, let the upstream installer provision managed CPython 3.12
+#   - An explicit system-Python opt-out fails through the upstream installer with a clear message
 
 # Step 7: Install pipx (preferred by upstream installer)
 #   - pip install pipx (if not present)
@@ -516,7 +516,7 @@ Offline tests (no network, no sudo):
 ### Phase 2 feature signals
 - References `download.crew.kiro.dev/cli.sh`
 - References `--channel` flag
-- References Python ≥ 3.10 check
+- References Python ≥ 3.12 check for optional pipx use and managed-Python fallback
 - References `kirocrew doctor`
 - References `kirocrew setup` with TTY guard (`[[ -t 0 ]]`)
 - References pipx
@@ -571,7 +571,7 @@ Offline tests (no network, no sudo):
 | V3-L1 | ExecStart hardcodes binary path | Fixed: uses `__BINPATH__` placeholder, resolved via `command -v kirocrew` at install time |
 | V3-L2 | Step 10 extras path | Fixed: will use resolved path (same as V3-L1 logic) |
 | V3-N1 | pipx inject vs extras syntax | Noted: implementer maps extras→packages (voice→boto3,amazon-transcribe; aws→boto3) |
-| H1 | AL2023 Python version claim | Fixed: AL2023 current AMIs ship 3.11+; script checks available interpreters newest-first |
+| H1 | KiroCrew Python version claim | Updated for v0.6.0: the wheel requires Python 3.12+, while hosts with older system Python delegate to the upstream managed-CPython path. |
 | H2 | Installer URL resilience | Added: clear fail message with actionable hints (DNS/proxy/firewall) |
 | H3 | Missing --model flag | Fixed: arg parser accepts `--model` and ignores with informational log |
 | H4 | Venv path wrong | Fixed: `~/.kiro/crew-venv` (beside data home, not inside — matches upstream) |

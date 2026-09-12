@@ -494,8 +494,8 @@ fi
 # PHASE 2: KiroCrew Layer
 # ══════════════════════════════════════════════════════════════════════════════
 
-# ── Step 7: Ensure Python ≥ 3.12 ─────────────────────────────────────────────
-step "Ensuring Python ≥ 3.12 for KiroCrew"
+# ── Step 7: Discover Python ≥ 3.12 for optional pipx ─────────────────────────
+step "Checking for optional Python ≥ 3.12"
 
 KIROCREW_PY=""
 for candidate in python3.12 python3.13 python3; do
@@ -507,40 +507,25 @@ for candidate in python3.12 python3.13 python3; do
   fi
 done
 
-# On AL2023, if no ≥3.12 found, try installing python3.12
-if [[ -z "${KIROCREW_PY}" ]] && command -v dnf &>/dev/null; then
-  log "No Python ≥3.12 found; installing python3.12 via dnf..."
-  sudo dnf install -y -q python3.12 2>/dev/null || true
-  if command -v python3.12 &>/dev/null; then
-    KIROCREW_PY="python3.12"
-  fi
+if [[ -n "${KIROCREW_PY}" ]]; then
+  ok "Supported system Python available for optional pipx: ${KIROCREW_PY} ($(${KIROCREW_PY} --version 2>&1))"
+else
+  log "No system Python ≥3.12 found — the upstream installer will provision managed CPython 3.12"
 fi
 
-if [[ -z "${KIROCREW_PY}" ]]; then
-  fail "Python ≥3.12 is required for KiroCrew v0.6.0. On Amazon Linux: sudo dnf install python3.12"
-fi
-ok "Python for KiroCrew: ${KIROCREW_PY} ($(${KIROCREW_PY} --version 2>&1))"
+# ── Step 8: Install pipx when a supported system Python is available ──────────
+step "Ensuring pipx is available when possible"
 
-# ── Step 8: Install pipx ─────────────────────────────────────────────────────
-step "Ensuring pipx is available"
-
-if ! command -v pipx &>/dev/null; then
+if ! command -v pipx &>/dev/null && [[ -n "${KIROCREW_PY}" ]]; then
   log "Installing pipx using ${KIROCREW_PY}..."
   "${KIROCREW_PY}" -m pip install --user pipx 2>/dev/null || true
   export PATH="${HOME}/.local/bin:${PATH}"
 fi
 
-# Verify pipx uses the correct Python (>=3.12), not an unsupported system version
 if command -v pipx &>/dev/null; then
-  PIPX_PY_VERSION="$(pipx --version 2>/dev/null && python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "")"
-  # If pipx is linked to an unsupported Python, reinstall under the correct interpreter
-  if pipx environment 2>/dev/null | grep -q "python3.9\|Python 3.9"; then
-    log "pipx is running under Python 3.9 — reinstalling under ${KIROCREW_PY}"
-    "${KIROCREW_PY}" -m pip install --user --force-reinstall pipx 2>/dev/null || true
-  fi
   ok "pipx available: $(pipx --version 2>/dev/null || echo unknown)"
 else
-  log "pipx not available — upstream installer will use managed venv instead"
+  log "pipx not available — upstream installer will use its managed venv"
 fi
 
 # ── Step 9: Run upstream KiroCrew installer ───────────────────────────────────
@@ -559,10 +544,10 @@ if [[ -n "${KIROCREW_HOME_OVERRIDE}" ]]; then
   export KIROCREW_HOME="${KIROCREW_HOME_OVERRIDE}"
 fi
 
-# Ensure the correct Python is first in PATH for the upstream installer
-# The upstream cli.sh uses `python3` — if system python3 is 3.9 but we have 3.11+
-# available, we need to make sure the right one is found first.
-if [[ "${KIROCREW_PY}" != "python3" ]]; then
+# Ensure a supported system Python is first in PATH for the upstream installer
+# when one is available. Otherwise, leave Python resolution to the upstream
+# installer so it can provision managed CPython 3.12.
+if [[ -n "${KIROCREW_PY}" && "${KIROCREW_PY}" != "python3" ]]; then
   KIROCREW_PY_PATH="$(command -v "${KIROCREW_PY}")"
   KIROCREW_PY_DIR="$(dirname "${KIROCREW_PY_PATH}")"
   # Create a temporary symlink so the upstream installer's `python3` resolves correctly
@@ -584,7 +569,7 @@ curl -fsSL "${KIROCREW_INSTALLER_URL}" -o /tmp/install-kirocrew.sh || {
 if ! sh /tmp/install-kirocrew.sh "${KIROCREW_INSTALLER_ARGS[@]}"; then
   rm -f /tmp/install-kirocrew.sh
   fail "KiroCrew installer failed. Possible causes:
-  - Python: ensure ${KIROCREW_PY} is ≥3.10
+  - Python: KiroCrew v0.6.0 requires 3.12+; the official installer provisions managed CPython 3.12 by default, or use a supported system interpreter
   - OpenSSL: required for signature verification
   - Channel: '${CHANNEL}' may not have a published release yet"
 fi
