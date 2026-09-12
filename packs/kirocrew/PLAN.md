@@ -53,7 +53,7 @@ Source: https://kiro.dev/docs/crew/installation.md
 
 | Step | Description | Notes |
 |------|-------------|-------|
-| 6 | Ensure Python ≥ 3.10 (3.12 recommended) | AL2023 current AMIs ship 3.11+; if somehow missing, `dnf install python3.11`. Ubuntu 22.04 ships 3.10. |
+| 6 | Ensure Python ≥ 3.12 for KiroCrew v0.6.0 | KiroCrew v0.6.0 requires Python 3.12+. The official installer provisions a managed CPython 3.12 by default; this preflight keeps pipx and fallback paths on the same supported floor. On AL2023, if no supported interpreter is available, install `python3.12`. |
 | 7 | Install pipx (if not present) | KiroCrew installer prefers pipx; pre-install for cleaner management |
 | 8 | Run upstream KiroCrew installer | `curl -fsSL https://download.crew.kiro.dev/cli.sh \| sh -s -- --channel <channel> [--version <ver>]` |
 | 9 | Verify `kirocrew` binary in PATH | `kirocrew --version`; fail with actionable message if not found |
@@ -77,12 +77,12 @@ Source: https://kiro.dev/docs/crew/installation.md
 - Installs via **pipx** (preferred, if available) or a managed venv at `~/.kiro/crew-venv` (BESIDE the data home, not inside it)
 - Binary: `~/.local/bin/kirocrew`
 - Channels: `stable` (default), `nightly`, `insider` (env: `KIROCREW_CHANNEL`)
-- Requires: curl, openssl, Python ≥ 3.10, sha256sum/shasum
+- Requires: curl, openssl, Python ≥ 3.12, sha256sum/shasum
 
 ### Installer error handling:
 - If `download.crew.kiro.dev` is unreachable: `fail` with actionable message (check DNS/firewall/proxy)
 - If signature verification fails: upstream installer already aborts — we propagate
-- If Python < 3.10: attempt `dnf install python3.11` (AL2023) or fail with clear prereq message
+- If Python < 3.12: attempt `dnf install python3.12` (AL2023) or fail with clear prereq message
 
 ### Data home (`~/.kiro/crew/`, env: `KIROCREW_HOME`):
 ```
@@ -143,8 +143,8 @@ params:
     description: "KiroCrew release channel (stable | nightly | insider)"
     default: "stable"  # confirmed by Roy 2026-08-05
   - name: kirocrew-version
-    description: "Pin KiroCrew to a specific version (leave empty for latest in channel)"
-    default: ""
+    description: "Pin KiroCrew to the published v0.6.0 artifact on the stable channel"
+    default: "0.6.0"
   - name: extras
     description: "Comma-separated pip extras to install after wheel (voice, aws)"
     default: "aws,voice"  # confirmed by Roy 2026-08-05
@@ -245,9 +245,9 @@ pack_banner "kirocrew"
 # PHASE 2: KiroCrew Layer
 # ══════════════════════════════════════════════════════════════════════════
 
-# Step 6: Ensure Python ≥ 3.10
-#   - Check python3.12, python3.11, python3.10, python3 (in order)
-#   - On AL2023 if none ≥3.10: dnf install python3.11
+# Step 6: Ensure Python ≥ 3.12
+#   - Check python3.12, python3.13, python3 (in order)
+#   - On AL2023 if none ≥3.12: dnf install python3.12
 #   - Fail with clear message if still not available
 
 # Step 7: Install pipx (preferred by upstream installer)

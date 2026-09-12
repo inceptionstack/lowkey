@@ -29,7 +29,7 @@ PACK_ARG_REGION="$(pack_config_get region "us-east-1")"
 PACK_ARG_FROM_SECRET="$(pack_config_get from-secret "")"
 PACK_ARG_API_KEY="$(pack_config_get kiro-api-key "")"
 PACK_ARG_CHANNEL="$(pack_config_get channel "stable")"
-PACK_ARG_KIROCREW_VERSION="$(pack_config_get kirocrew-version "0.5.0")"
+PACK_ARG_KIROCREW_VERSION="$(pack_config_get kirocrew-version "0.6.0")"
 PACK_ARG_EXTRAS="$(pack_config_get extras "aws,voice")"
 PACK_ARG_GATEWAY_PORT="$(pack_config_get gateway-port "5476")"
 PACK_ARG_START_GATEWAY="$(pack_config_get start-gateway "true")"
@@ -53,7 +53,7 @@ Options:
   --from-secret        Secrets Manager id/arn for Kiro API key      [default: ""]
   --channel            KiroCrew release channel                     [default: stable]
                        (stable | nightly | insider)
-  --kirocrew-version   Pin KiroCrew version                         [default: 0.5.0]
+  --kirocrew-version   Pin KiroCrew version                         [default: 0.6.0]
                        Channel and version BOTH form the download path
                        (cli/<channel>/<version>/cli-manifest.json), so they
                        must be compatible. This is the published ARTIFACT
@@ -494,30 +494,30 @@ fi
 # PHASE 2: KiroCrew Layer
 # ══════════════════════════════════════════════════════════════════════════════
 
-# ── Step 7: Ensure Python ≥ 3.10 ─────────────────────────────────────────────
-step "Ensuring Python ≥ 3.10 for KiroCrew"
+# ── Step 7: Ensure Python ≥ 3.12 ─────────────────────────────────────────────
+step "Ensuring Python ≥ 3.12 for KiroCrew"
 
 KIROCREW_PY=""
-for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
+for candidate in python3.12 python3.13 python3; do
   if command -v "${candidate}" &>/dev/null; then
-    if "${candidate}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
+    if "${candidate}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,12) else 1)' 2>/dev/null; then
       KIROCREW_PY="${candidate}"
       break
     fi
   fi
 done
 
-# On AL2023, if no ≥3.10 found, try installing python3.11
+# On AL2023, if no ≥3.12 found, try installing python3.12
 if [[ -z "${KIROCREW_PY}" ]] && command -v dnf &>/dev/null; then
-  log "No Python ≥3.10 found; installing python3.11 via dnf..."
-  sudo dnf install -y -q python3.11 2>/dev/null || true
-  if command -v python3.11 &>/dev/null; then
-    KIROCREW_PY="python3.11"
+  log "No Python ≥3.12 found; installing python3.12 via dnf..."
+  sudo dnf install -y -q python3.12 2>/dev/null || true
+  if command -v python3.12 &>/dev/null; then
+    KIROCREW_PY="python3.12"
   fi
 fi
 
 if [[ -z "${KIROCREW_PY}" ]]; then
-  fail "Python ≥3.10 is required for KiroCrew. On Amazon Linux: sudo dnf install python3.11"
+  fail "Python ≥3.12 is required for KiroCrew v0.6.0. On Amazon Linux: sudo dnf install python3.12"
 fi
 ok "Python for KiroCrew: ${KIROCREW_PY} ($(${KIROCREW_PY} --version 2>&1))"
 
@@ -530,10 +530,10 @@ if ! command -v pipx &>/dev/null; then
   export PATH="${HOME}/.local/bin:${PATH}"
 fi
 
-# Verify pipx uses the correct Python (>=3.10), not system 3.9
+# Verify pipx uses the correct Python (>=3.12), not an unsupported system version
 if command -v pipx &>/dev/null; then
   PIPX_PY_VERSION="$(pipx --version 2>/dev/null && python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "")"
-  # If pipx is linked to a Python < 3.10, reinstall under the correct interpreter
+  # If pipx is linked to an unsupported Python, reinstall under the correct interpreter
   if pipx environment 2>/dev/null | grep -q "python3.9\|Python 3.9"; then
     log "pipx is running under Python 3.9 — reinstalling under ${KIROCREW_PY}"
     "${KIROCREW_PY}" -m pip install --user --force-reinstall pipx 2>/dev/null || true
