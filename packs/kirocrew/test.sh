@@ -332,10 +332,10 @@ else
   fail "install.sh missing --channel"
 fi
 
-if grep -q 'python3.10\|python3.11\|python3.12\|python3.13' "${INSTALL}"; then
-  pass "install.sh checks Python ≥3.10 candidates"
+if grep -q 'python3.12' "${INSTALL}" && grep -q 'Python ≥3.12' "${INSTALL}"; then
+  pass "install.sh checks Python ≥3.12 candidates"
 else
-  fail "install.sh missing Python version check"
+  fail "install.sh missing Python ≥3.12 check"
 fi
 
 if grep -q 'kirocrew doctor' "${INSTALL}"; then
