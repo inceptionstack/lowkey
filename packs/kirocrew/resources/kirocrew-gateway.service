@@ -31,6 +31,7 @@ ProtectHome=read-only
 # that kiro-cli subprocesses (spawned via ACP) may write to.
 ReadWritePaths=/home/ec2-user/.kiro
 ReadWritePaths=/home/ec2-user/.local
+ReadWritePaths=/home/ec2-user/workplace
 ReadWritePaths=__HOME__
 PrivateTmp=true
 
