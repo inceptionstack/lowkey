@@ -343,9 +343,8 @@ install_aws_toolkit_skills "${PACK_SKILLS_DIR}"
 # Step 6b: Playwright CLI + Chromium (headless browser for agent tasks)
 #
 # Root-cause fixes (Roy directive 2026-08-23):
-#  1. PLAYWRIGHT_BROWSERS_PATH -> ~/.local/share/ms-playwright (always writable
-#     under ProtectSystem=strict + ProtectHome=no). CLI daemon dir also lands
-#     here. Previously ~/.cache/ms-playwright was read-only at runtime.
+#  1. PLAYWRIGHT_BROWSERS_PATH -> ~/.local/share/ms-playwright, a stable
+#     writable registry. CLI daemon dir also lands here.
 #  2. Pin @playwright/cli + playwright runner to matching versions so browser
 #     revision numbers never drift (@playwright/cli@0.1.18 bundles core 1.63.0-alpha-2026-08-05).
 #  3. Install 'chromium' explicitly — the CLI defaults to the 'chrome' channel
@@ -910,19 +909,14 @@ if [[ "${START_GATEWAY}" == "true" ]]; then
     sudo cp /tmp/kirocrew-gateway.service "${SERVICE_DST}"
     rm -f /tmp/kirocrew-gateway.service
 
-    # Install the Playwright / gh-auth drop-in (Roy directive 2026-08-23 08:27):
-    # ProtectHome=no for the agent's normal $HOME writes, plus explicit
-    # ReadWritePaths for ~/.cache and ~/.config (belt-and-suspenders in case a
-    # future ProtectHome tightening removes the blanket rw), plus
-    # PLAYWRIGHT_BROWSERS_PATH env so the CLI's daemon dir + browser payloads
-    # live under a stable writable path. Additive across drop-ins for
-    # ReadWritePaths=; ProtectHome= is replaced (not additive).
+    # Install the Playwright drop-in: PLAYWRIGHT_BROWSERS_PATH so the CLI's
+    # daemon dir + browser payloads live under a stable writable path.
     if [[ -f "${SERVICE_DROPIN_SRC}" ]]; then
       sudo mkdir -p "${SERVICE_DROPIN_DIR}"
       sudo cp "${SERVICE_DROPIN_SRC}" "${SERVICE_DROPIN_DIR}/10-playwright.conf"
-      ok "Installed drop-in: ${SERVICE_DROPIN_DIR}/10-playwright.conf (ProtectHome=no + Playwright registry)"
+      ok "Installed drop-in: ${SERVICE_DROPIN_DIR}/10-playwright.conf (Playwright registry)"
     else
-      warn "Drop-in not found: ${SERVICE_DROPIN_SRC} — Playwright will hit the read-only-\$HOME failure at runtime"
+      warn "Drop-in not found: ${SERVICE_DROPIN_SRC} — Playwright will use its default browser registry"
     fi
 
     sudo systemctl daemon-reload
