@@ -53,7 +53,7 @@ Source: https://kiro.dev/docs/crew/installation.md
 
 | Step | Description | Notes |
 |------|-------------|-------|
-| 6 | Discover Python ≥ 3.12 for optional pipx | KiroCrew v0.6.0 requires Python 3.12+. The official installer provisions a managed CPython 3.12 by default, so a host such as Ubuntu 22.04 may have no supported system interpreter and still install successfully. |
+| 6 | Discover Python ≥ 3.12 for optional pipx | KiroCrew v0.7.2 requires Python 3.12+. The official installer provisions a managed CPython 3.12 by default, so a host such as Ubuntu 22.04 may have no supported system interpreter and still install successfully. |
 | 7 | Install pipx (if not present) | KiroCrew installer prefers pipx; pre-install for cleaner management |
 | 8 | Run upstream KiroCrew installer | `curl -fsSL https://download.crew.kiro.dev/cli.sh \| sh -s -- --channel <channel> [--version <ver>]` |
 | 9 | Verify `kirocrew` binary in PATH | `kirocrew --version`; fail with actionable message if not found |
@@ -143,8 +143,8 @@ params:
     description: "KiroCrew release channel (stable | nightly | insider)"
     default: "stable"  # confirmed by Roy 2026-08-05
   - name: kirocrew-version
-    description: "Pin KiroCrew to the published v0.6.0 artifact on the stable channel"
-    default: "0.6.0"
+    description: "Pin KiroCrew to the published v0.7.2 artifact on the stable channel"
+    default: "0.7.2"
   - name: extras
     description: "Comma-separated pip extras to install after wheel (voice, aws)"
     default: "aws,voice"  # confirmed by Roy 2026-08-05
@@ -571,7 +571,7 @@ Offline tests (no network, no sudo):
 | V3-L1 | ExecStart hardcodes binary path | Fixed: uses `__BINPATH__` placeholder, resolved via `command -v kirocrew` at install time |
 | V3-L2 | Step 10 extras path | Fixed: will use resolved path (same as V3-L1 logic) |
 | V3-N1 | pipx inject vs extras syntax | Noted: implementer maps extras→packages (voice→boto3,amazon-transcribe; aws→boto3) |
-| H1 | KiroCrew Python version claim | Updated for v0.6.0: the wheel requires Python 3.12+, while hosts with older system Python delegate to the upstream managed-CPython path. |
+| H1 | KiroCrew Python version claim | Updated for v0.7.2: the wheel requires Python 3.12+, while hosts with older system Python delegate to the upstream managed-CPython path. |
 | H2 | Installer URL resilience | Added: clear fail message with actionable hints (DNS/proxy/firewall) |
 | H3 | Missing --model flag | Fixed: arg parser accepts `--model` and ignores with informational log |
 | H4 | Venv path wrong | Fixed: `~/.kiro/crew-venv` (beside data home, not inside — matches upstream) |

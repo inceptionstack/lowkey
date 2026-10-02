@@ -186,6 +186,26 @@ else
   fail "install.sh --help does not exit 0"
 fi
 
+# ── auto-update disabled before any gateway start ────────────────────────────
+# A gateway start with auto_update on re-runs cli.sh against the channel's
+# latest release; killing the preload gateway mid-update leaves the venv
+# half-built and ~/.local/bin/kirocrew dangling.
+header "auto-update disabled"
+
+AUTO_UPDATE_LINE="$(grep -n "auto_update = false" "${INSTALL}" | head -1 | cut -d: -f1)"
+FIRST_GATEWAY_LINE="$(grep -nE 'kirocrew gateway( --|[[:space:]]*&)' "${INSTALL}" | head -1 | cut -d: -f1)"
+if [[ -n "${AUTO_UPDATE_LINE}" && -n "${FIRST_GATEWAY_LINE}" && "${AUTO_UPDATE_LINE}" -lt "${FIRST_GATEWAY_LINE}" ]]; then
+  pass "auto_update=false is written before the first gateway start"
+else
+  fail "auto_update=false must be written before the first gateway start (auto_update line='${AUTO_UPDATE_LINE}', gateway line='${FIRST_GATEWAY_LINE}')"
+fi
+
+if grep -q '"agent":{"sandbox":"off"}' "${INSTALL}" && ! grep -q "printf '{\"agent\":{\"sandbox\":\"off\"}}" "${INSTALL}"; then
+  pass "sandbox config fallback keeps auto_update=false"
+else
+  fail "sandbox config fallback overwrites config.local.json without auto_update=false"
+fi
+
 # ── version pin consistency ──────────────────────────────────────────────────
 # The pinned KiroCrew version is stated in three independent places. They drift
 # silently on a version bump, and a stale help/manifest value misleads operators
