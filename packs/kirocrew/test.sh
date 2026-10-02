@@ -464,16 +464,15 @@ else
   fail "unit missing NoNewPrivileges"
 fi
 
-if grep -q 'ProtectSystem=strict' "${UNIT}"; then
-  pass "unit has ProtectSystem=strict"
+# KiroCrew 0.7+ issues owner login tokens only to callers in the gateway's
+# mount namespace; any of these directives gives the gateway a private one and
+# makes host-side `kirocrew token` fail with HTTP 403.
+NS_DIRECTIVES='^(ProtectSystem|ProtectHome|ReadWritePaths|ReadOnlyPaths|InaccessiblePaths|PrivateTmp|PrivateDevices|PrivateMounts|BindPaths|BindReadOnlyPaths|TemporaryFileSystem|ProtectKernelTunables|ProtectKernelModules|ProtectControlGroups|PrivateUsers)='
+NS_HITS="$(cat "${UNIT}" "${PACK_DIR}"/resources/kirocrew-gateway.service.d/*.conf 2>/dev/null | grep -E "${NS_DIRECTIVES}" || true)"
+if [[ -z "${NS_HITS}" ]]; then
+  pass "unit + drop-ins create no private mount namespace (kirocrew token works from the host)"
 else
-  fail "unit missing ProtectSystem=strict"
-fi
-
-if grep -q 'ReadWritePaths=/home/ec2-user/.kiro' "${UNIT}"; then
-  pass "unit ReadWritePaths covers ~/.kiro"
-else
-  fail "unit ReadWritePaths too narrow (should cover ~/.kiro)"
+  fail "unit or drop-in creates a private mount namespace: ${NS_HITS//$'\n'/ }"
 fi
 
 if grep -Fxq 'Alias=kirocrew.service' "${UNIT}"; then

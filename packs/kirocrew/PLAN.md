@@ -336,13 +336,9 @@ KillSignal=SIGINT
 
 # Hardening
 NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=read-only
-# Covers both ~/.kiro/crew (data home) and ~/.kiro/settings, ~/.kiro/agents,
-# ~/.kiro/env etc. that kiro-cli subprocesses (spawned via ACP) may write to.
-ReadWritePaths=/home/ec2-user/.kiro
-ReadWritePaths=/home/ec2-user/.local
-PrivateTmp=true
+# No mount-namespace directives (ProtectSystem/ProtectHome/ReadWritePaths/
+# PrivateTmp): KiroCrew 0.7+ refuses owner tokens to callers outside the
+# gateway's mount namespace, which breaks host-side `kirocrew token`.
 
 [Install]
 WantedBy=multi-user.target
@@ -531,7 +527,7 @@ Offline tests (no network, no sudo):
 - File exists at resources/kirocrew-gateway.service
 - Contains `__PORT__` and `__HOME__` placeholders
 - Has `User=ec2-user`
-- Has security hardening (NoNewPrivileges, ProtectSystem)
+- Has NoNewPrivileges and no mount-namespace directives (test.sh enforces)
 
 ### Registry consistency
 - `kirocrew` in registry.yaml
@@ -556,7 +552,7 @@ Offline tests (no network, no sudo):
 - KiroCrew upstream installer performs **two-layer verification**: RSA-SHA256 signature of the manifest (against embedded public key), then SHA-256 of the wheel against the signed manifest. No unsigned fallback exists.
 - No additional secrets needed — KiroCrew reuses the same `KIRO_API_KEY` env var
 - Channel validation: accept only `stable|nightly|insider` (matches upstream); reject with exit 2
-- systemd unit: hardened with NoNewPrivileges, ProtectSystem=strict, ReadWritePaths scoped
+- systemd unit: NoNewPrivileges only; mount-namespace hardening removed for KiroCrew 0.7+ owner-token checks
 - Shell profile at `/etc/profile.d/kirocrew.sh` is world-readable — must NEVER contain secrets
 - `~/.kiro/crew/.env` (credentials file) inherits default umask; consider explicit chmod 600 in setup
 

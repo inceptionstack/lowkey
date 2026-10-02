@@ -21,16 +21,86 @@ cd "$HOME" 2>/dev/null || cd /tmp
 
 export AWS_PAGER=""
 export PAGER=""
-aws() { command aws --no-cli-pager "$@"; }
 
 # Persistent log file for debugging (survives script exit)
 INSTALL_LOG="/tmp/lowkey-install.log"
 : > "$INSTALL_LOG"
+chmod 600 "$INSTALL_LOG" 2>/dev/null || true
+# /tmp does not survive a CloudShell session restart; $HOME does.
+INSTALL_LOG_KEEP_DIR="${HOME}/.lowkey/logs"
+INSTALL_LOG_KEEP=""
+
+# ── Install log ─────────────────────────────────────────────────────────────
+# Every user-facing message, step transition, AWS CLI call (with exit code) and,
+# on a fatal error, the failing command/line/function stack go to $INSTALL_LOG.
+# Secrets never reach the file: values registered with log_register_secret are
+# masked verbatim, and common secret shapes are masked by pattern as a backstop.
+_LOG_SECRETS=""
+log_register_secret() {
+  # Very short values would mask unrelated text; real secrets are long.
+  if [[ ${#1} -ge 8 ]]; then
+    _LOG_SECRETS="${_LOG_SECRETS}${1}"$'\n'
+  fi
+  return 0
+}
+_LOG_SECRET_NAME='([Aa][Pp][Ii][_-]?[Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww]([Oo][Rr][Dd])?)'
+_log_redact() {
+  local s="$1" secret
+  if [[ -n "$_LOG_SECRETS" ]]; then
+    while IFS= read -r secret; do
+      [[ -n "$secret" ]] && s="${s//"$secret"/<redacted>}"
+    done <<< "$_LOG_SECRETS"
+  fi
+  printf '%s\n' "$s" | sed -E \
+    -e "s/$(printf '\033')\[[0-9;]*[A-Za-z]//g" \
+    -e "s/(ParameterKey=[A-Za-z_]*${_LOG_SECRET_NAME}[A-Za-z_]*,ParameterValue=)[^ ]*/\\1<redacted>/g" \
+    -e "s/([A-Za-z_-]*${_LOG_SECRET_NAME}[A-Za-z_-]*(=|\": *\"))[^ ,\"&']+/\\1<redacted>/g" \
+    -e 's/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/<redacted-jwt>/g' \
+    -e 's/sk-[A-Za-z0-9_-]{16,}/sk-<redacted>/g' \
+    -e 's/[0-9]{6,}:[A-Za-z0-9_-]{25,}/<redacted-bot-token>/g' \
+    -e 's/(AKIA|ASIA)[0-9A-Z]{16}/\1<redacted>/g'
+}
+_ilog() {
+  local level="$1"; shift
+  _log_redact "$(date -u '+%Y-%m-%dT%H:%M:%SZ') [${level}] $*" >> "$INSTALL_LOG" 2>/dev/null || true
+}
+
+aws() {
+  local rc=0
+  command aws --no-cli-pager "$@" || rc=$?
+  _ilog AWS "aws $* -> rc=${rc}"
+  return "$rc"
+}
+
+# Record where a fatal error happened. Fires in subshells too (set -E); those
+# are logged as TRACE because a failure inside $(...) is often handled by the
+# caller. A main-shell ERR under set -e is the command that ends the run.
+_FATAL_ERR=""
+_on_err() {
+  local rc="$1" cmd="$2" line="$3" i stack=""
+  for ((i = 1; i < ${#FUNCNAME[@]}; i++)); do
+    stack+="${FUNCNAME[$i]}:${BASH_LINENO[$((i - 1))]} "
+  done
+  if [[ "${BASH_SUBSHELL:-0}" -gt 0 ]]; then
+    _ilog TRACE "command failed in subshell (rc=${rc}) at line ${line}: ${cmd} [${stack% }]"
+  else
+    _FATAL_ERR="install.sh line ${line} (rc=${rc}) in ${stack% }: ${cmd}"
+    _ilog ERROR "$_FATAL_ERR"
+  fi
+}
+set -E
+trap '_on_err "$?" "$BASH_COMMAND" "$LINENO"' ERR
 
 show_debug_locations() {
   echo -e "\033[1;33m  Debug info:\033[0m" >&2
+  if [[ -n "${_FATAL_ERR:-}" ]]; then
+    echo -e "\033[1;33m    Failed at:      $(_log_redact "$_FATAL_ERR")\033[0m" >&2
+  fi
   if [[ -s "${INSTALL_LOG:-}" ]]; then
     echo -e "\033[1;33m    Installer log:  ${INSTALL_LOG}\033[0m" >&2
+  fi
+  if [[ -n "${INSTALL_LOG_KEEP:-}" && -s "$INSTALL_LOG_KEEP" ]]; then
+    echo -e "\033[1;33m    Saved copy:     ${INSTALL_LOG_KEEP}\033[0m" >&2
   fi
   if [[ -n "${CLONE_DIR:-}" && "${CLONE_DIR}" == /tmp/* && -d "$CLONE_DIR" ]]; then
     echo -e "\033[1;33m    Clone dir:      ${CLONE_DIR}\033[0m" >&2
@@ -72,10 +142,26 @@ cleanup_on_interrupt() {
 }
 trap cleanup_on_interrupt INT TERM
 
+persist_install_log() {
+  [[ -s "$INSTALL_LOG" ]] || return 0
+  mkdir -p "$INSTALL_LOG_KEEP_DIR" 2>/dev/null && chmod 700 "$INSTALL_LOG_KEEP_DIR" 2>/dev/null || return 0
+  INSTALL_LOG_KEEP="${INSTALL_LOG_KEEP_DIR}/install-$(date -u '+%Y%m%d-%H%M%S')-$$.log"
+  cp "$INSTALL_LOG" "$INSTALL_LOG_KEEP" 2>/dev/null && chmod 600 "$INSTALL_LOG_KEEP" 2>/dev/null || INSTALL_LOG_KEEP=""
+  # Keep the 20 most recent logs.
+  ls -1t "$INSTALL_LOG_KEEP_DIR"/install-*.log 2>/dev/null | tail -n +21 | while IFS= read -r old; do rm -f "$old"; done
+  return 0
+}
+
 # Always show debug info on non-zero exit (EXIT trap is more reliable than ERR)
 trap '
   exit_code=$?
   purge_secret_tmpfiles
+  if [[ $exit_code -ne 0 ]]; then
+    _ilog FATAL "installer exiting with code ${exit_code} during step ${_TELEM_CURRENT_STEP:-unknown}: ${_FATAL_ERR:-no failing command recorded}"
+  else
+    _ilog INFO "installer finished successfully"
+  fi
+  persist_install_log
   if [[ $exit_code -ne 0 ]]; then
     echo -e "\n\033[0;31m✗ Installer failed (exit code $exit_code)\033[0m" >&2
     show_debug_locations
@@ -700,6 +786,7 @@ AUTO_RENAME_ACCOUNT=false
 DISABLE_ACCOUNT_RENAME=false
 WEBUI_EMAIL=""
 WEBUI_NO_AUTH=false
+_ARGS_FOR_LOG="$*"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --non-interactive|--yes|-y) AUTO_YES=true; shift ;;
@@ -837,6 +924,7 @@ USAGE
     *) shift ;;
   esac
 done
+log_register_secret "${TELEGRAM_BOT_TOKEN_RAW:-}"
 
 # If --debug-in-repo, go back to the original directory (before cd $HOME)
 if [[ "$DEBUG_IN_REPO" == "true" ]]; then
@@ -846,7 +934,7 @@ SCRIPT_DIR="$_ORIG_DIR"
 
 # Debug logging — writes to install log only, never to terminal
 dbg() {
-  [[ "$DEBUG_IN_REPO" == "true" ]] && echo "[DBG] $*" >> "$INSTALL_LOG"
+  _ilog DBG "$*"
   return 0
 }
 
@@ -871,6 +959,11 @@ IS_CLOUDSHELL=false
 if [[ -n "${AWS_EXECUTION_ENV:-}" && "${AWS_EXECUTION_ENV}" == *"CloudShell"* ]] || [[ -d /home/cloudshell-user && "$(whoami)" == "cloudshell-user" ]]; then
   IS_CLOUDSHELL=true
 fi
+
+_ilog INFO "lowkey installer ${INSTALLER_VERSION} (commit ${INSTALLER_COMMIT}, ${INSTALLER_DATE}), branch ${REPO_BRANCH}"
+_ilog INFO "host: $(uname -srm 2>/dev/null || echo unknown); bash ${BASH_VERSION}; cloudshell=${IS_CLOUDSHELL}; user=$(whoami 2>/dev/null || echo unknown); region env=${AWS_REGION:-${AWS_DEFAULT_REGION:-unset}}; profile=${AWS_PROFILE:-default}"
+_ilog INFO "aws cli: $(command aws --version 2>&1 | head -1 || echo 'not found')"
+_ilog INFO "args: ${_ARGS_FOR_LOG:-<none>}"
 
 # ============================================================================
 # gum — UI toolkit (installed to /tmp, no root required)
@@ -940,10 +1033,14 @@ install_gum() {
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; DIM='\033[2m'; NC='\033[0m'
 MAGENTA='\033[0;35m'; WHITE='\033[1;37m'
 
-info()  { echo -e "  ${BLUE}▸${NC} $1"; }
-ok()    { echo -e "  ${GREEN}✓${NC} $1"; }
-warn()  { echo -e "  ${YELLOW}⚠${NC} $1"; }
-fail()  { echo -e "  ${RED}✗${NC} $1"; show_debug_locations; exit 1; }
+info()  { echo -e "  ${BLUE}▸${NC} $1"; _ilog INFO "$1"; }
+ok()    { echo -e "  ${GREEN}✓${NC} $1"; _ilog OK "$1"; }
+warn()  { echo -e "  ${YELLOW}⚠${NC} $1"; _ilog WARN "$1"; }
+fail()  {
+  _FATAL_ERR="${_FATAL_ERR:-fail() called from ${FUNCNAME[1]:-main}:${BASH_LINENO[0]}: $1}"
+  _ilog FAIL "$1 (from ${FUNCNAME[1]:-main}:${BASH_LINENO[0]})"
+  echo -e "  ${RED}✗${NC} $1"; show_debug_locations; exit 1
+}
 
 # ── Elapsed time formatting ──────────────────────────────────────────────────
 elapsed_fmt() {
@@ -963,6 +1060,7 @@ STEP_NAMES=()
 step() {
   STEP_NUM=$((STEP_NUM + 1))
   STEP_NAMES+=("$1")
+  _ilog STEP "[${STEP_NUM}/${TOTAL_STEPS}] $1 | pack=${PACK_NAME:-} profile=${PROFILE_NAME:-} stack=${STACK_NAME:-} region=${DEPLOY_REGION:-} account=${ACCOUNT_ID:-} instance=${INSTANCE_ID:-}"
   echo ""
   $GUM style --foreground 117 --bold --border double --border-foreground 240 \
     --padding "0 2" --margin "0 2" "[${STEP_NUM}/${TOTAL_STEPS}] $1"
@@ -984,11 +1082,13 @@ prompt_secret() {
   local text="$1" var="$2" default="${3:-}"
   if [[ "$AUTO_YES" == true && -n "$default" ]]; then
     printf -v "$var" '%s' "$default"
+    log_register_secret "$default"
     return
   fi
   local value
   _gum_or_die value $GUM input --password --header "$text" --placeholder "$text" || value="$default"
   printf -v "$var" '%s' "${value:-$default}"
+  log_register_secret "${value:-$default}"
 }
 
 confirm() {
@@ -1188,6 +1288,15 @@ open_url() {
   [[ -n "${WSL_DISTRO_NAME:-}" ]] && command -v explorer.exe &>/dev/null \
     && explorer.exe "$url" 2>/dev/null && return 0
   return 1
+}
+
+# Append a stack's failed resource events to the install log.
+log_stack_failures() {
+  local stack="$1" region="$2" events
+  events=$(command aws --no-cli-pager cloudformation describe-stack-events --stack-name "$stack" --region "$region" \
+    --query "StackEvents[?contains(ResourceStatus,'FAILED')]|[:15].[Timestamp,LogicalResourceId,ResourceType,ResourceStatus,ResourceStatusReason]" \
+    --output text 2>&1) || true
+  _ilog ERROR "failed stack events for ${stack} (${region}):"$'\n'"${events:-<none returned>}"
 }
 
 # Run a command, capture output; on failure show full log and exit.
@@ -2844,7 +2953,7 @@ deploy_cfn_stack() {
     --capabilities $capabilities \
     --parameter-overrides $(format_cfn_deploy_params) \
     --no-fail-on-empty-changeset \
-    || fail "CloudFormation deployment failed"
+    || { log_stack_failures "$STACK_NAME" "$DEPLOY_REGION"; fail "CloudFormation deployment failed"; }
 
   info "Stack deployment complete"
 
@@ -3128,7 +3237,7 @@ show_complete() {
   if [[ "${PACK_NAME}" == "kirocrew" ]]; then
     local cf_url=""
     cf_url=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$DEPLOY_REGION" \
-      --query 'Stacks[0].Outputs[?OutputKey==`KiroCrewDashboardUrl`].OutputValue' --output text 2>/dev/null)
+      --query 'Stacks[0].Outputs[?OutputKey==`KiroCrewDashboardUrl`].OutputValue' --output text 2>/dev/null) || cf_url=""
     local dash_base=""
     if [[ -n "$cf_url" && "$cf_url" != "None" ]]; then
       dash_base="$cf_url"
@@ -3161,8 +3270,15 @@ show_complete() {
         --query 'StandardOutputContent' --output text 2>/dev/null || echo "")
       # kirocrew token prints both a localhost URL and a public URL; pull the JWT
       # out of either. Format is `...?token=<jwt>` where <jwt> has three
-      # dot-separated base64url segments.
-      dash_token=$(printf '%s' "$token_out" | grep -oE 'token=[A-Za-z0-9_.-]+' | head -1 | sed 's/^token=//')
+      # dot-separated base64url segments. No match is not fatal: fall back to
+      # the plain dashboard URL below.
+      dash_token=$(printf '%s' "$token_out" | grep -oE 'token=[A-Za-z0-9_.-]+' | head -1 | sed 's/^token=//') || dash_token=""
+      log_register_secret "$dash_token"
+      if [[ -z "$dash_token" ]]; then
+        _ilog WARN "kirocrew token returned no login token; output: ${token_out:-<empty>}"
+      fi
+    else
+      _ilog WARN "could not send the kirocrew token SSM command"
     fi
 
     next_block+="Dashboard:\n"

@@ -25,14 +25,13 @@ KillSignal=SIGINT
 
 # Hardening
 NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=read-only
-# Covers ~/.kiro/crew (data home), ~/.kiro/settings, ~/.kiro/agents, ~/.kiro/env
-# that kiro-cli subprocesses (spawned via ACP) may write to.
-ReadWritePaths=/home/ec2-user/.kiro
-ReadWritePaths=/home/ec2-user/.local
-ReadWritePaths=__HOME__
-PrivateTmp=true
+# Do NOT add ProtectSystem=, ProtectHome=, ReadWritePaths=, PrivateTmp= or any
+# other directive that gives the gateway its own mount namespace. KiroCrew
+# 0.7+ issues owner login tokens (`kirocrew token`, the dashboard CLI login
+# link) only to callers in the gateway's user AND mount namespace, so a private
+# mount namespace makes every host-side `kirocrew token` fail with HTTP 403
+# "could not verify this process as the local owner". KiroCrew applies its own
+# per-agent sandbox; upstream's EC2 unit uses none of these directives either.
 
 [Install]
 WantedBy=multi-user.target
