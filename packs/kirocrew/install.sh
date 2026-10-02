@@ -29,7 +29,7 @@ PACK_ARG_REGION="$(pack_config_get region "us-east-1")"
 PACK_ARG_FROM_SECRET="$(pack_config_get from-secret "")"
 PACK_ARG_API_KEY="$(pack_config_get kiro-api-key "")"
 PACK_ARG_CHANNEL="$(pack_config_get channel "stable")"
-PACK_ARG_KIROCREW_VERSION="$(pack_config_get kirocrew-version "0.6.0")"
+PACK_ARG_KIROCREW_VERSION="$(pack_config_get kirocrew-version "0.7.2")"
 PACK_ARG_EXTRAS="$(pack_config_get extras "aws,voice")"
 PACK_ARG_GATEWAY_PORT="$(pack_config_get gateway-port "5476")"
 PACK_ARG_START_GATEWAY="$(pack_config_get start-gateway "true")"
@@ -53,7 +53,7 @@ Options:
   --from-secret        Secrets Manager id/arn for Kiro API key      [default: ""]
   --channel            KiroCrew release channel                     [default: stable]
                        (stable | nightly | insider)
-  --kirocrew-version   Pin KiroCrew version                         [default: 0.6.0]
+  --kirocrew-version   Pin KiroCrew version                         [default: 0.7.2]
                        Channel and version BOTH form the download path
                        (cli/<channel>/<version>/cli-manifest.json), so they
                        must be compatible. This is the published ARTIFACT
@@ -569,7 +569,7 @@ curl -fsSL "${KIROCREW_INSTALLER_URL}" -o /tmp/install-kirocrew.sh || {
 if ! sh /tmp/install-kirocrew.sh "${KIROCREW_INSTALLER_ARGS[@]}"; then
   rm -f /tmp/install-kirocrew.sh
   fail "KiroCrew installer failed. Possible causes:
-  - Python: KiroCrew v0.6.0 requires 3.12+; the official installer provisions managed CPython 3.12 by default, or use a supported system interpreter
+  - Python: KiroCrew v0.7.2 requires 3.12+; the official installer provisions managed CPython 3.12 by default, or use a supported system interpreter
   - OpenSSL: required for signature verification
   - Channel: '${CHANNEL}' may not have a published release yet"
 fi
@@ -587,6 +587,32 @@ fi
 
 KIROCREW_INSTALLED_VERSION="$(kirocrew --version 2>/dev/null || echo unknown)"
 ok "KiroCrew installed: ${KIROCREW_INSTALLED_VERSION}"
+
+# ── Step 10b: Disable KiroCrew self-update ───────────────────────────────────
+# With auto_update on (the upstream default), any gateway start — including the
+# brief embedding-model preload below — re-runs cli.sh whenever the feed has a
+# newer release. cli.sh moves the working venv aside before rebuilding it and
+# only restores it on failure, not on a signal, so stopping the preload gateway
+# mid-update leaves ~/.local/bin/kirocrew dangling and the install dead.
+# The pack pins its version; upgrades go through the pack, not the gateway.
+step "Disabling KiroCrew auto-update (version is pinned by the pack)"
+KIROCREW_CFG_DIR="${KIROCREW_HOME:-${HOME}/.kiro/crew}"
+mkdir -p "${KIROCREW_CFG_DIR}"
+local_cfg="${KIROCREW_CFG_DIR}/config.local.json"
+if [[ -f "${local_cfg}" ]]; then
+  tmp_cfg="$(mktemp)"
+  if jq '.auto_update = false' "${local_cfg}" > "${tmp_cfg}" 2>/dev/null; then
+    mv "${tmp_cfg}" "${local_cfg}"
+  else
+    rm -f "${tmp_cfg}"
+    warn "jq merge failed; writing auto_update=false directly to ${local_cfg}"
+    printf '{"auto_update":false}\n' > "${local_cfg}"
+  fi
+else
+  printf '{"auto_update":false}\n' > "${local_cfg}"
+fi
+chmod 600 "${local_cfg}"
+ok "auto_update=false written to ${local_cfg}"
 
 # ── Step 11: Install pip extras ──────────────────────────────────────────────
 if [[ -n "${EXTRAS}" ]]; then
@@ -761,10 +787,10 @@ if [[ "${PACK_ARG_PROFILE:-}" == "builder" ]]; then
     else
       rm -f "${tmp_cfg}"
       warn "jq merge failed; writing agent.sandbox=off directly to ${local_cfg}"
-      printf '{"agent":{"sandbox":"off"}}\n' > "${local_cfg}"
+      printf '{"auto_update":false,"agent":{"sandbox":"off"}}\n' > "${local_cfg}"
     fi
   else
-    printf '{"agent":{"sandbox":"off"}}\n' > "${local_cfg}"
+    printf '{"auto_update":false,"agent":{"sandbox":"off"}}\n' > "${local_cfg}"
   fi
   chown "${KIRO_USER}:${KIRO_USER}" "${local_cfg}" 2>/dev/null || true
   chmod 600 "${local_cfg}"
@@ -864,7 +890,8 @@ fi
 if [[ "${START_GATEWAY}" == "true" ]]; then
   step "Installing kirocrew-gateway systemd service"
 
-  KIROCREW_BIN_PATH="$(command -v kirocrew)"
+  KIROCREW_BIN_PATH="$(command -v kirocrew)" \
+    || fail "kirocrew command no longer resolves ($(readlink ~/.local/bin/kirocrew 2>/dev/null || echo 'no ~/.local/bin/kirocrew')) — was the install replaced mid-run?"
   KIROCREW_DATA_HOME="${KIROCREW_HOME:-${HOME}/.kiro/crew}"
   SERVICE_SRC="${SCRIPT_DIR}/resources/kirocrew-gateway.service"
   SERVICE_DST="/etc/systemd/system/kirocrew-gateway.service"
