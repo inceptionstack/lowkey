@@ -146,6 +146,10 @@ def find_idle_hours(sessions_dir):
                 for line in f:
                     try:
                         obj = json.loads(line)
+                        # Skip a valid JSON line that is not an object ([], "x", 1, null).
+                        # Without this, obj.get raises AttributeError and the scan fails.
+                        if not isinstance(obj, dict):
+                            continue
                         msg = obj.get('message', {})
                         role = msg.get('role') if isinstance(msg, dict) else obj.get('role')
                         if role != 'user':

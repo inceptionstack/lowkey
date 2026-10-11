@@ -115,6 +115,17 @@ TEXT=$'Conversation info (untrusted metadata):\n```json\n{"sender":"Roy"}\n```\n
 mk_msg "2026-04-22T16:00:00Z" "$TEXT" > "$D8/sess.jsonl"
 assert_activity "$D8" "2026-04-22T16:00:00Z" "Message wrapped with Conversation info metadata still counts"
 
+# --- 9. Valid JSON lines that are not objects are skipped, not a SCAN_ERROR ---
+D9="$TMP/t9"; mkdir -p "$D9"
+{
+  echo '[]'
+  echo '"x"'
+  echo '1'
+  echo 'null'
+  mk_msg "2026-04-22T17:00:00Z" 'real message after non-object lines'
+} > "$D9/sess.jsonl"
+assert_activity "$D9" "2026-04-22T17:00:00Z" "Non-object JSON lines are skipped and do not stop the scan"
+
 echo
 printf "${BOLD}Results:${NC} ${GREEN}${PASS} pass${NC} / ${RED}${FAIL} fail${NC}\n"
 [[ $FAIL -eq 0 ]] || exit 1
