@@ -5,11 +5,18 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HOOKS_DIR="${REPO_ROOT}/.git/hooks"
 
-if [[ ! -d "${REPO_ROOT}/.git" ]]; then
+# In a linked worktree, .git is a file, so ask git for the git directory.
+if ! git -C "${REPO_ROOT}" rev-parse --git-dir >/dev/null 2>&1; then
   echo "Error: not a git repository. Run from the repo root." >&2
   exit 1
+fi
+
+# Use the hooks directory that git reads. In a linked worktree this is in the
+# common git directory. It also obeys core.hooksPath.
+HOOKS_DIR="$(git -C "${REPO_ROOT}" rev-parse --git-path hooks)"
+if [[ "${HOOKS_DIR}" != /* ]]; then
+  HOOKS_DIR="${REPO_ROOT}/${HOOKS_DIR}"
 fi
 
 mkdir -p "${HOOKS_DIR}"
