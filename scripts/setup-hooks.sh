@@ -4,10 +4,14 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
-# In a linked worktree, .git is a file, so ask git for the git directory.
-if ! git -C "${REPO_ROOT}" rev-parse --git-dir >/dev/null 2>&1; then
+# In a linked worktree, .git is a file, so ask git for the worktree root.
+# The root must be REPO_ROOT. If git finds only an ancestor repository (for
+# example, a copy of this repo inside an unrelated checkout), do not install
+# the hook into that repository.
+TOPLEVEL="$(git -C "${REPO_ROOT}" rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ -z "${TOPLEVEL}" ]] || [[ "$(cd "${TOPLEVEL}" && pwd -P)" != "${REPO_ROOT}" ]]; then
   echo "Error: not a git repository. Run from the repo root." >&2
   exit 1
 fi
@@ -21,8 +25,11 @@ fi
 
 mkdir -p "${HOOKS_DIR}"
 
-# Install pre-commit hook
-cp "${REPO_ROOT}/scripts/pre-commit" "${HOOKS_DIR}/pre-commit"
+# Install pre-commit hook. If core.hooksPath points to scripts/, the hook is
+# already in place, and cp would fail because the files are the same.
+if [[ ! "${REPO_ROOT}/scripts/pre-commit" -ef "${HOOKS_DIR}/pre-commit" ]]; then
+  cp "${REPO_ROOT}/scripts/pre-commit" "${HOOKS_DIR}/pre-commit"
+fi
 chmod +x "${HOOKS_DIR}/pre-commit"
 
 # Install git-secrets hooks (if git-secrets is available)

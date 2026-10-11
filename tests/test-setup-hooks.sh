@@ -7,6 +7,9 @@
 #   - setup-hooks.sh exits 0 in the main checkout and in the linked worktree
 #   - the pre-commit hook is in the hooks directory that git uses
 #   - setup-hooks.sh exits 1 outside a git repository
+#   - setup-hooks.sh exits 1 when git finds only an ancestor repository, and
+#     installs no hook into that repository
+#   - setup-hooks.sh exits 0 when core.hooksPath points to scripts/
 #
 # No AWS required. Run standalone or via CI (discovered by pack-tests.yml).
 set -euo pipefail
@@ -80,6 +83,38 @@ if [[ $rc -eq 1 ]]; then
 else
   fail "exits $rc outside a git repository (expected 1)"
 fi
+
+# Copy inside an unrelated repository: git finds only the ancestor.
+OUTER="$WORK/outer"
+"${G[@]}" init -q "$OUTER"
+mkdir -p "$OUTER/vendor/lowkey/scripts"
+cp "$REPO_ROOT/scripts/setup-hooks.sh" "$REPO_ROOT/scripts/pre-commit" "$OUTER/vendor/lowkey/scripts/"
+rc=0
+bash "$OUTER/vendor/lowkey/scripts/setup-hooks.sh" >/dev/null 2>&1 || rc=$?
+if [[ $rc -eq 1 ]]; then
+  pass "exits 1 when git finds only an ancestor repository"
+else
+  fail "exits $rc when git finds only an ancestor repository (expected 1)"
+fi
+if [[ ! -e "$OUTER/.git/hooks/pre-commit" ]]; then
+  pass "no hook installed into the ancestor repository"
+else
+  fail "hook installed into the ancestor repository"
+fi
+
+# core.hooksPath points to the directory that holds the source hook.
+"${G[@]}" -C "$MAIN" config core.hooksPath scripts
+if bash "$MAIN/scripts/setup-hooks.sh" >/dev/null 2>&1; then
+  pass "exits 0 when core.hooksPath is scripts"
+else
+  fail "exits non-zero when core.hooksPath is scripts"
+fi
+if [[ -x "$MAIN/scripts/pre-commit" ]]; then
+  pass "pre-commit hook in scripts/ is executable"
+else
+  fail "pre-commit hook in scripts/ is not executable"
+fi
+"${G[@]}" -C "$MAIN" config --unset core.hooksPath
 
 printf "\n%d passed, %d failed\n" "$PASS" "$FAIL"
 [[ $FAIL -eq 0 ]]
