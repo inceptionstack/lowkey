@@ -233,8 +233,9 @@ JSON
 
 WAKE_INLINE=$(cat <<JSON
 {"Version":"2012-10-17","Statement":[
-  {"Effect":"Allow","Action":["ec2:StartInstances","ec2:DescribeInstanceStatus"],
+  {"Effect":"Allow","Action":["ec2:StartInstances"],
    "Resource":"arn:aws:ec2:${REGION}:${ACCT_ID}:instance/${INSTANCE_ID}"},
+  {"Effect":"Allow","Action":["ec2:DescribeInstanceStatus"],"Resource":"*"},
   {"Effect":"Allow","Action":["ssm:GetParameter","ssm:PutParameter","ssm:DeleteParameter"],"Resource":[
     "arn:aws:ssm:${REGION}:${ACCT_ID}:parameter/openclaw/wake-token",
     "arn:aws:ssm:${REGION}:${ACCT_ID}:parameter/openclaw/wake-config/*"
