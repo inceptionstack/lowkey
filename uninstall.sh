@@ -48,9 +48,10 @@ require_cmd() { command -v "$1" &>/dev/null || fail "$2"; }
 # ============================================================================
 
 verify_aws_credentials() {
-  local sts_output sts_rc
-  sts_output=$(aws sts get-caller-identity 2>&1)
-  sts_rc=$?
+  local sts_output sts_rc=0
+  # Use "|| sts_rc=$?" so that set -e does not stop the script before the
+  # error output and the hint below are shown.
+  sts_output=$(aws sts get-caller-identity 2>&1) || sts_rc=$?
   if [[ $sts_rc -ne 0 ]]; then
     warn "aws sts get-caller-identity failed:"
     warn "$sts_output"
