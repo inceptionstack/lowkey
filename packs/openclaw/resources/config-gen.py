@@ -67,6 +67,13 @@ elif model_mode == "api-key" and provider_key:
   cfg["models"]["providers"]["anthropic"] = {"apiKey": provider_key, "models": []}
   cfg["agents"]["defaults"]["model"] = {"primary": "anthropic/claude-sonnet-4-6-20260514", "fallbacks": ["anthropic/claude-opus-4-6-20260514", PRIMARY_MODEL]}
 
-with open(f"{home}/.openclaw/openclaw.json", "w") as f:
+# The file holds the gateway token and can hold API keys. Make the directory
+# if it is missing, and write the file with mode 600 from the start. os.open
+# applies the mode only to a new file, so fchmod also sets it on an old file.
+cfg_dir = f"{home}/.openclaw"
+os.makedirs(cfg_dir, mode=0o700, exist_ok=True)
+fd = os.open(f"{cfg_dir}/openclaw.json", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+os.fchmod(fd, 0o600)
+with os.fdopen(fd, "w") as f:
   json.dump(cfg, f, indent=2)
 print(f"Config written (mode={model_mode})")
