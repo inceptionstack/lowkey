@@ -80,6 +80,7 @@ step() {
 ok()   { echo "[OK]    $(date -u '+%H:%M:%S') $1"; }
 fail() { echo "[FAIL]  $(date -u '+%H:%M:%S') $1"; }
 info() { echo "[INFO]  $(date -u '+%H:%M:%S') $1"; }
+warn() { echo "[WARN]  $(date -u '+%H:%M:%S') $1"; }
 
 usage() {
   cat <<EOF
