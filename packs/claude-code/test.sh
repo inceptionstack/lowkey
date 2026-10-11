@@ -538,16 +538,16 @@ header "Test: ~/.claude/settings.json (live environment)"
 SETTINGS="${HOME}/.claude/settings.json"
 
 if [[ -f "${SETTINGS}" ]]; then
-  pass "~/.claude/settings.json exists"
+  pass "${SETTINGS} exists"
   if command -v python3 &>/dev/null; then
     if python3 -c "import json; json.load(open('${SETTINGS}'))" 2>/dev/null; then
-      pass "~/.claude/settings.json is valid JSON"
+      pass "${SETTINGS} is valid JSON"
     else
-      fail "~/.claude/settings.json is invalid JSON"
+      fail "${SETTINGS} is invalid JSON"
     fi
   fi
 else
-  skip "~/.claude/settings.json not present — live settings tests skipped"
+  skip "${SETTINGS} not present — live settings tests skipped"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
