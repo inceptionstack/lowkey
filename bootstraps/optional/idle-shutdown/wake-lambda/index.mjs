@@ -1,10 +1,21 @@
 import { SSMClient, GetParameterCommand, DeleteParameterCommand, PutParameterCommand } from "@aws-sdk/client-ssm";
 import { EC2Client, StartInstancesCommand, DescribeInstanceStatusCommand } from "@aws-sdk/client-ec2";
+import { timingSafeEqual } from "node:crypto";
 
 const ssm = new SSMClient({});
 const ec2 = new EC2Client({});
 const TOKEN_PARAM = "/openclaw/wake-token";
 const CONFIG_PREFIX = "/openclaw/wake-config/";
+
+// Compare in constant time. timingSafeEqual throws when the lengths are not
+// equal, so compare the byte lengths first.
+function tokensMatch(given, stored) {
+  if (typeof given !== "string" || typeof stored !== "string") return false;
+  const a = Buffer.from(given, "utf8");
+  const b = Buffer.from(stored, "utf8");
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
 
 async function getParam(name, decrypt = false) {
   const res = await ssm.send(new GetParameterCommand({ Name: name, WithDecryption: decrypt }));
@@ -52,7 +63,7 @@ export const handler = async (event) => {
       return html("Expired", "This wake link has already been used or expired.", "⏰", 410);
     throw e;
   }
-  if (token !== stored) return html("Invalid Token", "This wake link is not valid.", "🚫", 403);
+  if (!tokensMatch(token, stored)) return html("Invalid Token", "This wake link is not valid.", "🚫", 403);
 
   // Load instance ID first — this is the only config needed for the critical wake path
   let instanceId;
