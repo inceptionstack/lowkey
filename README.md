@@ -48,6 +48,26 @@
 
 ## Getting Started
 
+### Step 0: Enable Bedrock Model Access (fresh accounts)
+
+On a fresh AWS account the deploy succeeds but agent runs fail with `run error: LLM request failed`. Two one-time gates apply:
+
+1. **Anthropic first-time-use form** (Anthropic models only) — once per account, or once at the Org management account. The old "Model access" console page is retired; submit from the model catalog playground, or via CLI:
+   ```bash
+   aws bedrock put-use-case-for-model-access --region us-east-1 \
+     --form-data "$(echo -n '{"companyName":"Your Name","companyWebsite":"https://github.com/your-username","intendedUsers":"1","industryOption":"Technology","otherIndustryOption":"","useCases":"AI coding agent in a personal sandbox account"}' | base64)"
+   ```
+   `companyWebsite` must be a real URL (a GitHub profile is fine — a placeholder can stall the entitlement). Takes ~15 min; verify with `aws bedrock get-use-case-for-model-access`.
+
+2. **Marketplace enablement** (any third-party serverless model) — enabled account-wide on first invocation, but only if the caller has `aws-marketplace:Subscribe`. The instance role doesn't, so invoke each model once from an admin identity ([CloudShell](https://console.aws.amazon.com/cloudshell/) is easiest):
+   ```bash
+   aws bedrock-runtime invoke-model --region us-east-1 \
+     --model-id us.anthropic.claude-sonnet-4-6 \
+     --cli-binary-format raw-in-base64-out \
+     --body '{"anthropic_version":"bedrock-2023-05-31","max_tokens":16,"messages":[{"role":"user","content":"ping"}]}' /dev/stdout
+   ```
+   Use the exact model ID your pack is configured with (see `packs/registry.yaml`). `us.*` and `global.*` count separately, as does each model in multi-model packs (opus + sonnet, Troika's `openai.gpt-5.5`).
+
 ### Step 1: Install Lowkey
 
 Run `curl -sfL install.lowkey.run | bash` — the installer walks you through **pack**, **profile**, **instance size**, and **deploy method** (CloudFormation CLI or Console).
@@ -184,6 +204,19 @@ curl -sfL uninstall.lowkey.run | bash
 ```
 
 Finds deployments by tag, lets you pick which to remove, deletes CloudFormation stacks (legacy Terraform deploys are still torn down via a pinned legacy ref), and optionally removes state buckets/lock tables.
+
+---
+
+## Troubleshooting
+
+**Runs fail with "LLM request failed" but the TUI shows `gateway connected | idle`** — the deploy is fine; Bedrock is rejecting the calls, and the TUI hides the real exception. Surface it from the instance (the same identity the gateway uses): SSM in, `sudo su - ec2-user`, then run the `invoke-model` command from Step 0 with your pack's model ID. Then map the error:
+
+- `ResourceNotFoundException` mentioning use case details → Step 0, gate 1
+- `ResourceNotFoundException` or 403 with the form already filed → Step 0, gate 2
+- `AccessDeniedException` → instance role policy needs the inference profile ARN *and* the underlying foundation-model ARNs
+- `ValidationException` → model not available in that region
+
+**SSM session lands in a bare shell without `openclaw` on PATH** — the session document runs `openclaw tui || exec bash --login`, so a clean TUI exit skips the fallback. Run `bash --login`. Relatedly, `SessionManagerPlugin is not found` from `aws ssm start-session` just means you're already on the box.
 
 ---
 
