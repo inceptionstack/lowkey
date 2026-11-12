@@ -29,7 +29,7 @@ PACK_ARG_REGION="$(pack_config_get region "us-east-1")"
 PACK_ARG_FROM_SECRET="$(pack_config_get from-secret "")"
 PACK_ARG_API_KEY="$(pack_config_get kiro-api-key "")"
 PACK_ARG_CHANNEL="$(pack_config_get channel "stable")"
-PACK_ARG_KIROCREW_VERSION="$(pack_config_get kirocrew-version "0.7.2")"
+PACK_ARG_KIROCREW_VERSION="$(pack_config_get kirocrew-version "0.12.2")"
 PACK_ARG_EXTRAS="$(pack_config_get extras "aws,voice")"
 PACK_ARG_GATEWAY_PORT="$(pack_config_get gateway-port "5476")"
 PACK_ARG_START_GATEWAY="$(pack_config_get start-gateway "true")"
@@ -53,7 +53,7 @@ Options:
   --from-secret        Secrets Manager id/arn for Kiro API key      [default: ""]
   --channel            KiroCrew release channel                     [default: stable]
                        (stable | nightly | insider)
-  --kirocrew-version   Pin KiroCrew version                         [default: 0.7.2]
+  --kirocrew-version   Pin KiroCrew version                         [default: 0.12.2]
                        Channel and version BOTH form the download path
                        (cli/<channel>/<version>/cli-manifest.json), so they
                        must be compatible. This is the published ARTIFACT
@@ -568,7 +568,7 @@ curl -fsSL "${KIROCREW_INSTALLER_URL}" -o /tmp/install-kirocrew.sh || {
 if ! sh /tmp/install-kirocrew.sh "${KIROCREW_INSTALLER_ARGS[@]}"; then
   rm -f /tmp/install-kirocrew.sh
   fail "KiroCrew installer failed. Possible causes:
-  - Python: KiroCrew v0.7.2 requires 3.12+; the official installer provisions managed CPython 3.12 by default, or use a supported system interpreter
+  - Python: KiroCrew v0.12.2 requires 3.12+; the official installer provisions managed CPython 3.12 by default, or use a supported system interpreter
   - OpenSSL: required for signature verification
   - Channel: '${CHANNEL}' may not have a published release yet"
 fi
