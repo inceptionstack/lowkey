@@ -10,6 +10,9 @@
 #   - ec2:StartInstances stays limited to the one instance ARN
 #
 # No AWS required. Run standalone or via CI (discovered by pack-tests.yml).
+# Note: pack-tests.yml runs only when its path filters match. Its filters do
+# not include bootstraps/**, so a change to install-idle.sh alone does not
+# start this test in CI. Run it by hand when you change that file.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -70,8 +73,9 @@ for s in stmts:
     actions = as_list(s.get("Action", []))
     resources = as_list(s.get("Resource", []))
     describes = [a for a in actions if a.startswith("ec2:Describe")]
-    if describes:
+    if "ec2:DescribeInstanceStatus" in actions:
         describe_seen = True
+    if describes:
         out(resources == ["*"],
             f"{', '.join(describes)} uses Resource \"*\" (got {resources})")
     if "ec2:StartInstances" in actions:
