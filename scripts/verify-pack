@@ -45,7 +45,8 @@ Examples:
   verify-pack ./packs/ironclaw --fix
   verify-pack --all
 EOF
-  exit 0
+  # Exit code is the first argument (default 0, for --help).
+  exit "${1:-0}"
 }
 
 # ── Resolve repo root ────────────────────────────────────────────────────────
@@ -399,9 +400,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ ${#TARGETS[@]} -eq 0 ]]; then
-  echo "Error: No pack directory specified."
-  echo ""
-  usage
+  # No target is an error: write to stderr and exit non-zero, so that a
+  # caller with an empty pack argument does not see a pass.
+  {
+    echo "Error: No pack directory specified."
+    echo ""
+  } >&2
+  usage 1 >&2
 fi
 
 for target in "${TARGETS[@]}"; do
